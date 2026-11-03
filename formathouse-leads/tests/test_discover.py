@@ -168,7 +168,8 @@ def test_export(con, tmp_path):
     discover.ingest(con, place(1), g, "brasserie", city)
     paths = export.export(con, tmp_path / "out")
     wb = openpyxl.load_workbook(paths["xlsx"])
-    assert wb.sheetnames == ["Alle leads", "Bronnen", "Legenda"]
+    assert wb.sheetnames == ["Alle leads", "Top 50", "E-mail outreach", "Instagram-wachtrij",
+                             "Bronnen", "Legenda"]
     ws = wb["Alle leads"]
     hdr = [c.value for c in ws[1]]
     row = {h: ws.cell(2, i + 1).value for i, h in enumerate(hdr)}

@@ -17,6 +17,23 @@ class Settings:
     db_path: Path
     output_dir: Path
     region: str
+    crawl_user_agent: str
+    crawl_delay: float
+    meta_access_token: str
+    meta_ig_user_id: str
+    meta_graph_version: str
+    anthropic_api_key: str
+    claude_model: str
+    smtp_host: str
+    smtp_port: int
+    smtp_user: str
+    smtp_password: str
+    from_name: str
+    from_email: str
+    daily_max: int
+    signature: str
+    unsubscribe_email: str
+    ig_daily_max: int
 
     @classmethod
     def load(cls) -> "Settings":
@@ -29,4 +46,24 @@ class Settings:
             db_path=p("LEADS_DB", "leads.db"),
             output_dir=p("OUTPUT_DIR", "output"),
             region=(os.getenv("REGIO") or "vlaanderen").strip().lower(),
+            crawl_user_agent=os.getenv("CRAWL_USER_AGENT")
+                or "FormatHouseResearch/0.1 (bedrijfsonderzoek; respecteert robots.txt)",
+            crawl_delay=float(os.getenv("CRAWL_DELAY_SECONDS") or 3),
+            meta_access_token=os.getenv("META_ACCESS_TOKEN", "").strip(),
+            meta_ig_user_id=os.getenv("META_IG_BUSINESS_ACCOUNT_ID", "").strip(),
+            meta_graph_version=(os.getenv("META_GRAPH_VERSION") or "v23.0").strip(),
+            anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", "").strip(),
+            claude_model=(os.getenv("CLAUDE_MODEL") or "claude-opus-5-5").strip(),
+            smtp_host=os.getenv("SMTP_HOST", "").strip(),
+            smtp_port=int(os.getenv("SMTP_PORT") or 587),
+            smtp_user=os.getenv("SMTP_USER", "").strip(),
+            smtp_password=os.getenv("SMTP_PASSWORD", ""),
+            from_name=os.getenv("OUTREACH_FROM_NAME") or "The Format House",
+            from_email=os.getenv("OUTREACH_FROM_EMAIL", "").strip(),
+            daily_max=min(int(os.getenv("OUTREACH_DAILY_MAX") or 25), 30),
+            signature=(os.getenv("OUTREACH_SIGNATURE") or "Team The Format House")
+                .replace("\\n", "\n"),
+            unsubscribe_email=os.getenv("OUTREACH_UNSUBSCRIBE_EMAIL", "").strip()
+                or os.getenv("OUTREACH_FROM_EMAIL", "").strip(),
+            ig_daily_max=min(int(os.getenv("IG_DAILY_MAX") or 15), 15),
         )
