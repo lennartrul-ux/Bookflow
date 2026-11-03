@@ -11,26 +11,58 @@ from dataclasses import dataclass, field
 class City:
     name: str
     country: str  # ISO: BE / NL
+    region: str   # VL (Vlaanderen) / BXL (Brussel) / NL
     lat: float
     lng: float
     radius_m: int = 15000  # "+ omgeving"
 
 
-# Volgorde = prioriteit: eerst België, dan Nederland.
+# Volgorde = prioriteit. Welke regio's meedoen, bepaalt REGIO in .env.
 CITIES: list[City] = [
-    City("Antwerpen", "BE", 51.2194, 4.4025),
-    City("Gent", "BE", 51.0543, 3.7174),
-    City("Mechelen", "BE", 51.0259, 4.4776),
-    City("Brussel", "BE", 50.8503, 4.3517),
-    City("Leuven", "BE", 50.8798, 4.7005),
-    City("Hasselt", "BE", 50.9307, 5.3325),
-    City("Brugge", "BE", 51.2093, 3.2247),
-    City("Breda", "NL", 51.5719, 4.7683),
-    City("Eindhoven", "NL", 51.4416, 5.4697),
-    City("Rotterdam", "NL", 51.9244, 4.4777),
-    City("Utrecht", "NL", 52.0907, 5.1214),
-    City("Amsterdam", "NL", 52.3676, 4.9041),
+    City("Antwerpen", "BE", "VL", 51.2194, 4.4025),
+    City("Gent", "BE", "VL", 51.0543, 3.7174),
+    City("Mechelen", "BE", "VL", 51.0259, 4.4776),
+    City("Brussel", "BE", "BXL", 50.8503, 4.3517),
+    City("Leuven", "BE", "VL", 50.8798, 4.7005),
+    City("Hasselt", "BE", "VL", 50.9307, 5.3325),
+    City("Brugge", "BE", "VL", 51.2093, 3.2247),
+    City("Breda", "NL", "NL", 51.5719, 4.7683),
+    City("Eindhoven", "NL", "NL", 51.4416, 5.4697),
+    City("Rotterdam", "NL", "NL", 51.9244, 4.4777),
+    City("Utrecht", "NL", "NL", 52.0907, 5.1214),
+    City("Amsterdam", "NL", "NL", 52.3676, 4.9041),
 ]
+
+
+# Werkgebied (REGIO in .env) → toegelaten regio's van de zoeksteden.
+REGIONS: dict[str, set[str]] = {
+    "vlaanderen": {"VL"},
+    "belgie": {"VL", "BXL"},
+    "be_nl": {"VL", "BXL", "NL"},
+}
+DEFAULT_REGION = "vlaanderen"
+
+
+def flemish_postal_code(code: str | None) -> bool:
+    """Vlaamse postcodes: 1500–3999 (Vlaams-Brabant, Antwerpen, Limburg)
+    en 8000–9999 (West- en Oost-Vlaanderen)."""
+    if not code or not code.isdigit() or len(code) != 4:
+        return False
+    n = int(code)
+    return 1500 <= n <= 3999 or 8000 <= n <= 9999
+
+
+def in_region(region: str, country: str | None, postal_code: str | None) -> bool:
+    allowed = REGIONS[region]
+    if country == "NL":
+        return "NL" in allowed
+    if country != "BE":
+        return False
+    if flemish_postal_code(postal_code):
+        return "VL" in allowed
+    if postal_code and postal_code.isdigit() and 1000 <= int(postal_code) <= 1299:
+        return "BXL" in allowed
+    return False  # Wallonië of postcode onbekend
 
 
 @dataclass(frozen=True)

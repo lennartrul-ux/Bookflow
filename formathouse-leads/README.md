@@ -37,7 +37,7 @@ prijspagina van Google Maps Platform en stel in Cloud Console een **budgetalert*
 
 ### Volgende fases (setup volgt per fase)
 - **Meta-app + Instagram Graph API** (Fase 3): Instagram-bedrijfsaccount, gekoppelde Facebook-pagina, Meta-app, Business Discovery en Ad Library. Ik begeleid je hier stap voor stap bij.
-- **KvK API** (Fase 2, NL), **Claude API** (Fase 4), **SMTP/Gmail** op een apart outreach-domein (Fase 5).
+- **KvK API** (Fase 2, alleen bij `REGIO=be_nl`), **Claude API** (Fase 4), **SMTP/Gmail** op een apart outreach-domein (Fase 5).
 
 ## Commando's (Fase 1)
 | Commando | Wat |
@@ -53,12 +53,17 @@ Runs zijn **hervatbaar**: per *groep × zoekterm × stad* wordt bijgehouden hoev
 pagina's al opgehaald zijn. Opnieuw starten gaat dus gewoon verder.
 
 ## Hoe Discovery werkt
-1. Per stad (eerst BE: Antwerpen, Gent, Mechelen, Brussel, Leuven, Hasselt, Brugge;
-   daarna NL: Breda, Eindhoven, Rotterdam, Utrecht, Amsterdam), met een cirkel van 15 km
-   ("+ omgeving"), wordt elke zoekterm van de groep om de beurt bevraagd (max. 3 pagina's van 20 resultaten).
+1. **Werkgebied** via `REGIO` in `.env`:
+   - `vlaanderen` (standaard): Antwerpen, Gent, Mechelen, Leuven, Hasselt, Brugge;
+   - `belgie`: + Brussel;
+   - `be_nl`: + Breda, Eindhoven, Rotterdam, Utrecht, Amsterdam.
+
+   Per stad wordt elke zoekterm van de groep om de beurt bevraagd, met een cirkel van 15 km
+   ("+ omgeving") en max. 3 pagina's van 20 resultaten.
 2. **Voorfilter** (instelbaar in `formathouse/briefing.py`). Afgewezen kandidaten
    blijven met hun reden in de database, zodat ze niet opnieuw beoordeeld worden:
-   buiten BE/NL · niet operationeel · grote keten · geen website in het Google-profiel ·
+   buiten werkgebied (getoetst op postcode; Vlaanderen = 1500–3999 en 8000–9999, dus
+   geen Brussel of Wallonië, ook niet aan de rand van een zoekcirkel) · niet operationeel · grote keten · geen website in het Google-profiel ·
    te weinig reviews (horeca < 100, fitness/beauty < 25, lifestyle < 15).
 3. **Ontdubbeling** op Google place_id, eigen domein (social- en boekingsplatformen tellen niet mee),
    KBO-/KvK-nummer (vanaf Fase 2) en genormaliseerde naam + stad.

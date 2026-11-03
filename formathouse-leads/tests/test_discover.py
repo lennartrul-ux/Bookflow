@@ -11,7 +11,7 @@ from formathouse.normalize import company_domain, norm_text
 
 
 def place(i, *, name=None, website="https://testzaak{i}.be", reviews=250, country="BE",
-          status="OPERATIONAL", city="Antwerpen"):
+          status="OPERATIONAL", city="Antwerpen", postal="2000"):
     return {
         "id": f"pid{i}",
         "displayName": {"text": name or f"Testzaak {i}"},
@@ -19,6 +19,7 @@ def place(i, *, name=None, website="https://testzaak{i}.be", reviews=250, countr
         "addressComponents": [
             {"longText": city, "shortText": city, "types": ["locality", "political"]},
             {"longText": "België", "shortText": country, "types": ["country", "political"]},
+            {"longText": postal, "shortText": postal, "types": ["postal_code"]},
         ],
         "websiteUri": website.format(i=i) if website else None,
         "primaryTypeDisplayName": {"text": "Restaurant"},
@@ -135,6 +136,22 @@ def test_prefilter_and_dedup(con):
     _, o7 = discover.ingest(con, place(7, country="FR"), g, "brasserie", city)
     assert (o1, o2, o3) == ("nieuw", "dubbel", "dubbel")
     assert (o4, o5, o6, o7) == ("afgewezen",) * 4
+    # buiten Vlaanderen: Brussel en Wallonië
+    _, o8 = discover.ingest(con, place(8, postal="1050", city="Elsene"), g, "brasserie", city)
+    _, o9 = discover.ingest(con, place(10, postal="4000", city="Luik"), g, "brasserie", city)
+    _, o10 = discover.ingest(con, place(11, postal="1800", city="Vilvoorde"), g, "brasserie", city)
+    assert (o8, o9, o10) == ("afgewezen", "afgewezen", "nieuw")
+
+
+def test_region_cities():
+    from formathouse.briefing import in_region
+    assert in_region("vlaanderen", "BE", "9000")
+    assert not in_region("vlaanderen", "BE", "1000")
+    assert not in_region("vlaanderen", "NL", "4811")
+    assert in_region("belgie", "BE", "1000")
+    assert not in_region("vlaanderen", "BE", None)
+    with pytest.raises(ValueError):
+        discover.run(None, None, "K", city_names=["Brussel"])
 
 
 def test_instagram_as_website(con):

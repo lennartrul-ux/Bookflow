@@ -48,10 +48,11 @@ def discover_run(
         if g not in GROUPS:
             raise typer.BadParameter(f"onbekende groep {g!r}")
     client = LoggedClient(con, "google_places", min_interval=0.3)
+    typer.echo(f"Werkgebied: {s.region}")
     try:
         stats = discover.run(con, client, s.google_places_api_key, group_keys=group,
-                             city_names=city, limit=limit, log=typer.echo)
-    except discover.MissingApiKey as e:
+                             city_names=city, limit=limit, region=s.region, log=typer.echo)
+    except (discover.MissingApiKey, ValueError) as e:
         typer.secho(str(e), fg=typer.colors.RED)
         raise typer.Exit(1)
     except RateLimited as e:

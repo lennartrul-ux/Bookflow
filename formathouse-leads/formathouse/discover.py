@@ -11,7 +11,7 @@ from dataclasses import dataclass, field
 import requests
 
 from . import db
-from .briefing import CITIES, GROUPS, City, SectorGroup
+from .briefing import CITIES, DEFAULT_REGION, GROUPS, REGIONS, City, SectorGroup, in_region
 from .httpclient import LoggedClient
 from .normalize import (
     company_domain, norm_enterprise_number, norm_text, social_platform,
@@ -85,12 +85,13 @@ def _component(place: dict, kind: str, short: bool = False) -> str | None:
     return None
 
 
-def evaluate(place: dict, group: SectorGroup) -> tuple[bool, str | None]:
+def evaluate(place: dict, group: SectorGroup,
+             region: str = DEFAULT_REGION) -> tuple[bool, str | None]:
     """Transparante voorfilter. Geeft (geaccepteerd, reden_van_afwijzing)."""
     name = (place.get("displayName") or {}).get("text", "")
     country = _component(place, "country", short=True)
-    if country not in ("BE", "NL"):
-        return False, "buiten BE/NL"
+    if not in_region(region, country, _component(place, "postal_code")):
+        return False, f"buiten werkgebied ({region})"
     if place.get("businessStatus", "OPERATIONAL") != "OPERATIONAL":
         return False, "niet operationeel volgens Google"
     low = f" {name.lower()} "
@@ -125,7 +126,7 @@ def _find_existing(con: sqlite3.Connection, *, place_id: str, domain: str | None
 
 
 def ingest(con: sqlite3.Connection, place: dict, group: SectorGroup, term: str,
-           search_city: City) -> tuple[int, str]:
+           search_city: City, region: str = DEFAULT_REGION) -> tuple[int, str]:
     """Sla één Places-resultaat op. Geeft (company_id, 'nieuw'|'afgewezen'|'dubbel')."""
     name = (place.get("displayName") or {}).get("text") or "?"
     city = _component(place, "locality") or _component(place, "postal_town")
@@ -145,7 +146,7 @@ def ingest(con: sqlite3.Connection, place: dict, group: SectorGroup, term: str,
         con.commit()
         return existing["id"], "dubbel"
 
-    accepted, reason = evaluate(place, group)
+    accepted, reason = evaluate(place, group, region)
     ts = db.now()
     cur = con.execute(
         """INSERT INTO companies(name, norm_name, city, norm_city, country, sector_group,
@@ -213,7 +214,7 @@ def _query_row(con, group: SectorGroup, term: str, city: City) -> sqlite3.Row:
 
 def run(con: sqlite3.Connection, client: LoggedClient, api_key: str, *,
         group_keys: list[str] | None = None, city_names: list[str] | None = None,
-        limit: int | None = None, log=print) -> RunStats:
+        limit: int | None = None, region: str = DEFAULT_REGION, log=print) -> RunStats:
     """Zoek kandidaten tot de quota (of `limit` nieuwe leads in deze run) bereikt zijn.
 
     Volgorde: groepen → steden in prioriteitsvolgorde → per pagina alle zoektermen
@@ -222,10 +223,13 @@ def run(con: sqlite3.Connection, client: LoggedClient, api_key: str, *,
     if not api_key:
         raise MissingApiKey("GOOGLE_PLACES_API_KEY ontbreekt in .env")
     groups = [GROUPS[k] for k in (group_keys or [k for k, g in GROUPS.items() if g.quota > 0])]
+    if region not in REGIONS:
+        raise ValueError(f"onbekende REGIO {region!r}; kies uit {', '.join(REGIONS)}")
     wanted = {c.lower() for c in city_names} if city_names else None
-    cities = [c for c in CITIES if wanted is None or c.name.lower() in wanted]
+    cities = [c for c in CITIES if c.region in REGIONS[region]
+              and (wanted is None or c.name.lower() in wanted)]
     if wanted and not cities:
-        raise ValueError(f"onbekende stad: {', '.join(city_names)}")
+        raise ValueError(f"stad niet gevonden binnen werkgebied {region}: {', '.join(city_names)}")
     stats = RunStats()
 
     def done() -> bool:
@@ -257,7 +261,7 @@ def run(con: sqlite3.Connection, client: LoggedClient, api_key: str, *,
                         stats.seen += 1
                         if done() or accepted_count(con, group.key) >= quota:
                             break
-                        _cid, outcome = ingest(con, place, group, term, city)
+                        _cid, outcome = ingest(con, place, group, term, city, region)
                         if outcome == "nieuw":
                             stats.new_accepted += 1
                             acc += 1
