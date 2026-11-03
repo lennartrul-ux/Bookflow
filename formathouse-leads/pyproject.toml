@@ -1,0 +1,12 @@
+[project]
+name = "formathouse-leads"
+version = "0.1.0"
+description = "Leadgeneratie- en outreachtool voor The Format House"
+requires-python = ">=3.11"
+dependencies = ["typer>=0.12", "requests>=2.31", "python-dotenv>=1.0", "openpyxl>=3.1"]
+
+[project.scripts]
+fh = "formathouse.cli:app"
+
+[tool.setuptools]
+packages = ["formathouse"]
