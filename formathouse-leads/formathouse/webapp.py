@@ -79,7 +79,8 @@ def job_discover(group: str, city: str | None, limit: int | None):
                           min_interval=0.3 if source == "google" else 5.0)
     st = discover.run(con, client, s.google_places_api_key, source=source,
                       group_keys=[group] if group else None,
-                      city_names=[city] if city else None, limit=limit, region=s.region, log=_log)
+                      city_names=[city] if city else None, limit=limit, region=s.region,
+                      user_agent=s.crawl_user_agent, log=_log)
     _log(f"nieuw: {st.new_accepted} · afgewezen: {st.new_rejected} · dubbel: {st.duplicates}")
     for reason, n in sorted(st.rejected_reasons.items(), key=lambda x: -x[1]):
         _log(f"  afgewezen – {reason}: {n}")
@@ -491,7 +492,7 @@ function render(){
  $("stats").innerHTML=S.groups.filter(g=>g.quota).map(g=>`<div class="stat"><b>${g.count} <span>/ ${g.quota}</span></b><span>${esc(g.label)}</span><div class="bar"><i style="width:${Math.min(100,g.count/g.quota*100)}%"></i></div></div>`).join("")
   +`<div class="stat"><b>${S.steps.score||0}</b><span>gescoord van ${S.active} leads</span></div><div class="stat"><b>${S.rejected}</b><span>afgewezen door voorfilter</span></div>`;
  const j=S.job;$("jobcard").style.display=(j.name?"block":"none");
- $("jobname").innerHTML=j.name?`${j.running?"⏳":"✓"} ${esc(j.name)}${j.running?" — bezig…":(j.error?' — <span class="no">fout</span>':" — klaar")}`:"";
+ $("jobname").innerHTML=j.name?`${j.running?"⏳":(j.error?"✗":"✓")} ${esc(j.name)}${j.running?" — bezig…":(j.error?' — <span class="no">fout</span>':" — klaar")}`:"";
  const L=$("log"),atEnd=L.scrollTop+L.clientHeight>=L.scrollHeight-10;L.textContent=j.log.join("\n");if(atEnd)L.scrollTop=L.scrollHeight;
  document.querySelectorAll("button[data-job]").forEach(b=>b.disabled=j.running);
  $("top").innerHTML=S.top.length?S.top.map(r=>`<tr><td>${r.top50?"★ ":""}${r.rank}</td><td><b>${r.score}</b><br><span class="pill ${r.priority}">${r.priority}</span></td>

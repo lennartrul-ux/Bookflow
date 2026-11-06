@@ -23,6 +23,10 @@ from .normalize import company_domain, norm_text, social_platform
 
 PLACES_URL = "https://places.googleapis.com/v1/places:searchText"
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
+# Publieke reserve-instanties, alleen gebruikt als de hoofdserver weigert of uitvalt.
+OVERPASS_MIRRORS = [OVERPASS_URL, "https://overpass.private.coffee/api/interpreter",
+                    "https://maps.mail.ru/osm/tools/overpass/api/interpreter"]
+DEFAULT_UA = "FormatHouseResearch/0.1 (bedrijfsonderzoek; kleinschalig)"
 MAX_PAGES = 3  # Text Search geeft maximaal 60 resultaten (3 × 20)
 FIELD_MASK = ",".join([
     "places.id", "places.displayName", "places.formattedAddress",
@@ -215,16 +219,29 @@ def _osm_richness(c: Candidate) -> int:
     return 2 * bool(c.socials) + bool(c.phone) + bool(c.address)
 
 
-def osm_fetch(client: LoggedClient, group_key: str, city: City) -> list[Candidate]:
+def osm_fetch(client: LoggedClient, group_key: str, city: City,
+              user_agent: str = DEFAULT_UA) -> list[Candidate]:
+    """Eén Overpass-query. Overpass weigert anonieme clients (HTTP 406), dus we sturen
+    een herkenbare User-Agent mee. Bij weigering/uitval: volgende publieke instantie."""
     q = overpass_query(group_key, city)
-    resp = client.request(
-        "POST", OVERPASS_URL, data={"data": q}, timeout=180,
-        log_params={"groep": group_key, "stad": city.name, "radius_m": city.radius_m},
-        summarize=lambda r: f"{len(r.json().get('elements', []))} elementen",
-    )
-    resp.raise_for_status()
-    cands = [from_osm(e) for e in resp.json().get("elements", [])]
-    return sorted(cands, key=_osm_richness, reverse=True)
+    headers = {"User-Agent": user_agent or DEFAULT_UA, "Accept": "application/json"}
+    last_error: Exception | None = None
+    for url in OVERPASS_MIRRORS:
+        try:
+            resp = client.request(
+                "POST", url, data={"data": q}, headers=headers, timeout=180,
+                log_params={"groep": group_key, "stad": city.name, "radius_m": city.radius_m},
+                summarize=lambda r: f"{len(r.json().get('elements', []))} elementen",
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        except (requests.RequestException, ValueError) as e:
+            last_error = e
+            continue
+        cands = [from_osm(e) for e in data.get("elements", [])]
+        return sorted(cands, key=_osm_richness, reverse=True)
+    raise RuntimeError(f"OpenStreetMap (Overpass) is nu niet bereikbaar: {last_error}. "
+                       "Probeer het over een paar minuten opnieuw.")
 
 
 # ── Voorfilter en opslag ─────────────────────────────────────────────
@@ -361,7 +378,8 @@ def _select(group_keys, city_names, region):
 def run(con: sqlite3.Connection, client: LoggedClient, api_key: str, *,
         source: str = "google", group_keys: list[str] | None = None,
         city_names: list[str] | None = None, limit: int | None = None,
-        region: str = DEFAULT_REGION, log: Callable = print) -> RunStats:
+        region: str = DEFAULT_REGION, user_agent: str = DEFAULT_UA,
+        log: Callable = print) -> RunStats:
     """Zoek kandidaten tot de quota (of `limit` nieuwe leads in deze run) bereikt zijn."""
     if source == "google" and not api_key:
         raise MissingApiKey("GOOGLE_PLACES_API_KEY ontbreekt in .env (of gebruik --bron osm)")
@@ -400,7 +418,7 @@ def run(con: sqlite3.Connection, client: LoggedClient, api_key: str, *,
                 q = _query_row(con, group, term, city)
                 if q["status"] == "done":
                     continue
-                cands = osm_fetch(client, group.key, city)
+                cands = osm_fetch(client, group.key, city, user_agent)
                 stats.calls += 1
                 acc = take(cands, group, term, city)
                 # 'done' pas als alle kandidaten verwerkt zijn; anders bij hervatten opnieuw

@@ -351,3 +351,24 @@ def test_full_export(con, tmp_path):
     for col in ("Bedrijfsnaam", "Reels laatste 30 dagen", "Leadscore", "Salesinsteek", "Bronnen",
                 "Verificatiedatum"):
         assert col in hdr
+
+
+def test_overpass_user_agent_and_mirror(con):
+    from formathouse.httpclient import LoggedClient
+    calls = []
+
+    class Overpass:
+        def request(self, method, url, headers=None, **kw):
+            calls.append((url, headers.get("User-Agent")))
+            if url == discover.OVERPASS_URL:
+                return SimpleNamespace(status_code=406, headers={}, text="Not Acceptable", content=b"",
+                                       json=lambda: {}, raise_for_status=lambda: (_ for _ in ()).throw(
+                                           __import__("requests").HTTPError("406")))
+            data = {"elements": [{"type": "node", "id": 1, "tags": {
+                "name": "Testbar", "amenity": "bar", "website": "https://testbar.be"}}]}
+            return SimpleNamespace(status_code=200, headers={}, text="", content=b"{}",
+                                   json=lambda: data, raise_for_status=lambda: None)
+    client = LoggedClient(con, "overpass", min_interval=0, session=Overpass())
+    cands = discover.osm_fetch(client, "horeca", ANTWERPEN, "TestUA/1.0 (+https://x.be)")
+    assert [c.name for c in cands] == ["Testbar"]
+    assert calls[0][1] == "TestUA/1.0 (+https://x.be)" and len(calls) == 2

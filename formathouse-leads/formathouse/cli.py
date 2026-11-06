@@ -89,7 +89,8 @@ def discover_run(
                           min_interval=0.3 if source == "google" else 5.0)
     try:
         stats = discover.run(con, client, s.google_places_api_key, source=source, group_keys=group,
-                             city_names=city, limit=limit, region=s.region, log=typer.echo)
+                             city_names=city, limit=limit, region=s.region,
+                             user_agent=s.crawl_user_agent, log=typer.echo)
     except (discover.MissingApiKey, ValueError) as e:
         typer.secho(str(e), fg=typer.colors.RED)
         raise typer.Exit(1)
