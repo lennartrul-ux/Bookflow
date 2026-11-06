@@ -157,7 +157,7 @@ def now() -> str:
 
 
 def connect(path: Path | str) -> sqlite3.Connection:
-    con = sqlite3.connect(str(path))
+    con = sqlite3.connect(str(path), timeout=30, check_same_thread=False)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA foreign_keys = ON")
     con.executescript(SCHEMA)

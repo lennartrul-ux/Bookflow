@@ -8,7 +8,27 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-load_dotenv(PROJECT_ROOT / ".env")
+ENV_PATH = PROJECT_ROOT / ".env"
+load_dotenv(ENV_PATH)
+
+
+def save_env(updates: dict[str, str], path: Path = ENV_PATH) -> None:
+    """Werk sleutels in .env bij (bestaande regels en commentaar blijven staan)."""
+    lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+    if not lines and (PROJECT_ROOT / ".env.example").exists():
+        lines = (PROJECT_ROOT / ".env.example").read_text(encoding="utf-8").splitlines()
+    todo = {k: v.replace("\n", " ").strip() for k, v in updates.items()}
+    for i, line in enumerate(lines):
+        key = line.split("=", 1)[0].strip()
+        if "=" in line and not line.lstrip().startswith("#") and key in todo:
+            lines[i] = f"{key}={todo.pop(key)}"
+    lines += [f"{k}={v}" for k, v in todo.items()]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    try:
+        path.chmod(0o600)
+    except OSError:
+        pass
+    load_dotenv(path, override=True)
 
 
 @dataclass(frozen=True)
@@ -37,6 +57,7 @@ class Settings:
 
     @classmethod
     def load(cls) -> "Settings":
+        load_dotenv(ENV_PATH, override=True)
         def p(name: str, default: str) -> Path:
             v = Path(os.getenv(name) or default)
             return v if v.is_absolute() else PROJECT_ROOT / v

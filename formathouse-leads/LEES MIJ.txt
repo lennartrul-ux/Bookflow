@@ -1,0 +1,30 @@
+THE FORMAT HOUSE · LEADS — zo start je
+
+MAC
+1. Dubbelklik op "Start Format House.command".
+2. Krijg je de melding dat het bestand niet geopend kan worden (onbekende ontwikkelaar)?
+   Klik dan met de rechtermuisknop (of ctrl-klik) op het bestand → "Open" → "Open".
+   Lukt dat niet: Systeeminstellingen → Privacy en beveiliging → onderaan "Open toch".
+   Dat hoeft maar één keer.
+3. De eerste keer installeert de app zichzelf (1 à 2 minuten). Daarna opent hij in je browser.
+4. Laat het zwarte Terminal-venster open zolang je met de app werkt. Sluit het om te stoppen.
+
+Vraagt je Mac om Python of "opdrachtregelprogramma's" te installeren? Klik op Installeer
+of download Python via https://www.python.org/downloads/macos/ en dubbelklik opnieuw.
+
+WINDOWS
+1. Installeer Python via https://www.python.org/downloads/windows/
+   (vink "Add Python to PATH" aan).
+2. Dubbelklik op "Start Format House.bat".
+
+IN DE APP
+- Start: leads zoeken → verwerken → Excel downloaden.
+- Leads: de beste leads met score en salesinsteek (★ = top 50).
+- E-mail: concept-mails maken, bekijken en goedkeuren. Niets vertrekt zonder jouw goedkeuring.
+- Instagram: de DM's van vandaag, met knoppen om het profiel te openen, de tekst te kopiëren
+  en "Verstuurd" aan te duiden. De app verstuurt zelf niets.
+- Instellingen: API-sleutels en e-mailinstellingen (allemaal optioneel). Ze blijven op je
+  eigen computer.
+
+Werkt de app zonder sleutels? Ja: leads komen dan uit OpenStreetMap (gratis), de score
+wordt met vaste regels berekend en de teksten komen uit een sjabloon.

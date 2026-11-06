@@ -10,9 +10,9 @@ import json
 from .score import BRIEFING
 
 SECTOR_HOOK = {
-    "horeca": "sfeer, gerechten en team in korte Reels die mensen doen reserveren",
-    "fitness": "coaches, lessen en community in herkenbare video's die nieuwe leden aantrekken",
-    "lifestyle": "collecties en lanceringen in een vaste stroom productvideo's",
+    "horeca": "jullie sfeer, gerechten en team",
+    "fitness": "jullie coaches, lessen en community",
+    "lifestyle": "jullie collecties en lanceringen",
 }
 
 EMAIL_SCHEMA = {
@@ -75,7 +75,7 @@ def email_footer(*, email: str, source_url: str, unsubscribe: str) -> str:
 
 def template_emails(lead: dict) -> dict:
     name, city = lead["bedrijf"], lead.get("stad") or "jullie regio"
-    hook = SECTOR_HOOK.get(lead.get("sectorgroep"), "jullie aanbod in een vaste stroom short-form video")
+    hook = SECTOR_HOOK.get(lead.get("sectorgroep"), "jullie aanbod")
     insteek = lead.get("salesinsteek") or ""
     return {
         "mail": {
@@ -84,8 +84,8 @@ def template_emails(lead: dict) -> dict:
                 f"Dag team van {name},\n\n"
                 f"Bij The Format House maken we professionele Reels, TikToks en Shorts voor "
                 f"bedrijven die social serieus nemen, maar niet elke week zelf de tijd hebben om "
-                f"te filmen en te monteren. Voor zaken zoals die van jullie in {city} denken we "
-                f"aan {hook}.\n\n"
+                f"te filmen en te monteren. Voor een zaak zoals die van jullie in {city} denken we "
+                f"aan een vaste stroom korte video's rond {hook}.\n\n"
                 + (f"{insteek}\n\n" if insteek else "")
                 + "Zin in een korte kennismaking van 15 minuten? Dan tonen we graag een paar "
                 "voorbeelden uit jullie sector."
@@ -121,9 +121,9 @@ DM_MAX = 400
 
 
 def template_dm(lead: dict) -> str:
-    hook = SECTOR_HOOK.get(lead.get("sectorgroep"), "jullie aanbod in een vaste stroom korte video's")
+    hook = SECTOR_HOOK.get(lead.get("sectorgroep"), "jullie aanbod")
     dm = (f"Hoi team van {lead['bedrijf']}! Ik ben van The Format House, een Belgisch content "
-          f"agency voor Reels en TikTok. We zien veel potentieel om {hook} te brengen. "
+          f"agency voor Reels en TikTok. We zien veel potentieel in korte video's rond {hook}. "
           "Mag ik jullie een paar voorbeelden sturen? Vrijblijvend uiteraard.")
     return dm[:DM_MAX]
 

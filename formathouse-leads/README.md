@@ -3,6 +3,17 @@
 Python-tool die potentiële klanten zoekt, verrijkt, scoort en benadert voor
 The Format House (short-form video voor Reels, TikTok, Shorts).
 
+## Snel starten (zonder terminal)
+Dubbelklik op **`Start Format House.command`** (Mac) of **`Start Format House.bat`** (Windows).
+De eerste keer installeert de app zichzelf. Daarna opent hij in je browser op
+`http://127.0.0.1:8765` (alleen op je eigen computer). Zie ook `LEES MIJ.txt`.
+
+De app heeft tabbladen voor alle stappen: Start (zoeken, verwerken, Excel), Leads, E-mail,
+Instagram en Instellingen (sleutels invullen). Zolang de app openstaat, vertrekken
+goedgekeurde mails automatisch op hun geplande tijdstip.
+
+Alles hieronder (de commando's met `fh`) is voor wie liever met de terminal werkt.
+
 **Alle zes fases zijn gebouwd en werken zonder API-sleutels.** Ontbreekt een sleutel,
 dan valt de tool terug op een alternatief of blijft het veld op `onbekend` staan:
 
