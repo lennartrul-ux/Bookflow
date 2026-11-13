@@ -94,3 +94,28 @@ def reset_all(con: sqlite3.Connection) -> dict[str, int]:
     con.commit()
     counts["contacten_onthouden"] = remembered
     return counts
+
+
+REQUIRED_TABLES = {"companies", "fields", "scores"}
+
+
+def import_database(upload: Path, db_path: Path, backup_dir: Path) -> dict:
+    """Vervang de lokale database door een geüploade (bv. reservekopie of pilot).
+    Controleert eerst dat het een database van deze app is; maakt een reservekopie."""
+    with open(upload, "rb") as fh:
+        if fh.read(16) != b"SQLite format 3\x00":
+            raise ValueError("Dit is geen databasebestand van de app (.db).")
+    test = sqlite3.connect(f"file:{upload}?mode=ro", uri=True)
+    try:
+        tables = {r[0] for r in test.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if not REQUIRED_TABLES <= tables:
+            raise ValueError("Dit bestand bevat geen leads van Format House Leads.")
+        leads = test.execute("SELECT COUNT(*) FROM companies WHERE excluded=0").fetchone()[0]
+    finally:
+        test.close()
+    saved = backup(db_path, backup_dir)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(upload, db_path)
+    con = db.connect(db_path)          # schema bijwerken naar de huidige versie
+    con.close()
+    return {"leads": leads, "backup": saved.name if saved else None}

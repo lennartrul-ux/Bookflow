@@ -15,6 +15,7 @@ import webbrowser
 
 import hmac
 import os
+from pathlib import Path
 import secrets
 
 from flask import Flask, Response, abort, jsonify, redirect, request, send_file, session
@@ -350,6 +351,7 @@ def _busy():
 
 
 LEAD_FILTERS = {
+    "schoon": "Schone lijst — klaar om te benaderen",
     "alle": "Alle actieve leads",
     "email": "Met e-mail",
     "instagram": "Met Instagram (zonder e-mail)",
@@ -365,7 +367,7 @@ LEAD_FILTERS = {
 def api_leads():
     """Volledige lijst met filters, ook leads zonder e-mail of Instagram."""
     _s, con = _ctx()
-    flt = request.args.get("filter", "alle")
+    flt = request.args.get("filter", "schoon")
     sector = request.args.get("sector", "")
     q = (request.args.get("q") or "").strip().lower()
     f = lambda key: f"(SELECT value FROM fields WHERE company_id=c.id AND field='{key}')"  # noqa: E731
@@ -376,7 +378,8 @@ def api_leads():
                {f('website')} AS website, {f('algemeen_email')} AS email,
                {f('instagram')} AS instagram, {f('algemeen_telefoon')} AS phone,
                {f('google_reviews')} AS reviews, {f('google_rating')} AS rating,
-               {f('google_categorie')} AS gcat, {f('categorie')} AS cat
+               {f('google_categorie')} AS gcat, {f('categorie')} AS cat,
+               {f('salesinsteek')} AS insteek
         FROM companies c LEFT JOIN scores s ON s.company_id=c.id
         ORDER BY s.rank IS NULL, s.rank, c.id DESC""").fetchall()
     counts = {k: 0 for k in LEAD_FILTERS}
@@ -393,6 +396,8 @@ def api_leads():
                 kinds.add("uitgesloten")
             if not r["enrich"]:
                 kinds.add("nieuw")
+            if r["enrich"] and r["priority"] in ("hoog", "interessant") and (r["email"] or r["instagram"]):
+                kinds.add("schoon")
             if r["email"]:
                 kinds.add("email")
             elif r["instagram"]:
@@ -417,6 +422,7 @@ def api_leads():
                     "phone": r["phone"], "reviews": r["reviews"], "rating": r["rating"],
                     "category": r["gcat"] or r["cat"], "score": r["total"], "priority": r["priority"],
                     "rank": r["rank"], "top50": bool(r["top50"]), "processed": bool(r["enrich"]),
+                    "insteek": r["insteek"],
                     "reason": reason, "removed": removed, "excluded": bool(r["excluded"])})
     return jsonify({"filters": LEAD_FILTERS, "counts": counts, "rows": out[:1000], "total": len(out)})
 
@@ -439,6 +445,43 @@ def api_restore():
     except KeyError as e:
         return jsonify({"ok": False, "message": str(e)}), 404
     return jsonify({"ok": True, "message": f"{name} teruggezet. Draai eventueel 'Verwerken' opnieuw."})
+
+
+@app.get("/download/backup.db")
+def dl_backup():
+    if hosted():
+        abort(404)
+    s, _con = _ctx()
+    if not s.db_path.exists():
+        abort(404)
+    return send_file(s.db_path, as_attachment=True,
+                     download_name=f"formathouse_leads_{dt.date.today()}.db")
+
+
+@app.post("/api/import")
+def api_import():
+    """Database importeren (lokaal): vervangt de huidige leads, met reservekopie."""
+    if hosted():
+        return jsonify({"ok": False, "message": "Importeren kan alleen in de app op je computer."}), 400
+    if JOB["running"]:
+        return _busy()
+    f = request.files.get("file")
+    if not f:
+        return jsonify({"ok": False, "message": "Kies eerst een bestand."}), 400
+    import tempfile
+    s, _con = _ctx()
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        f.save(tmp.name)
+    try:
+        res = manage.import_database(Path(tmp.name), s.db_path, _config.DATA_DIR / "backups")
+    except ValueError as e:
+        return jsonify({"ok": False, "message": str(e)}), 400
+    finally:
+        Path(tmp.name).unlink(missing_ok=True)
+    msg = f"Geïmporteerd: {res['leads']} leads."
+    if res["backup"]:
+        msg += f" Je vorige gegevens staan als reservekopie in de map backups ({res['backup']})."
+    return jsonify({"ok": True, "message": msg})
 
 
 @app.post("/api/reset")
@@ -498,8 +541,11 @@ def api_discover():
     group = b.get("group") or ""
     if group and group not in GROUPS:
         abort(400)
-    ok = start_job("Leads zoeken", lambda: job_discover(group, b.get("city") or None,
-                                                        _int(b.get("limit"))))
+    def search_and_process():
+        job_discover(group, b.get("city") or None, _int(b.get("limit")))
+        _log("Nieuwe leads meteen verwerken…")
+        job_pipeline(None)
+    ok = start_job("Leads zoeken en verwerken", search_and_process)
     return jsonify({"ok": True}) if ok else _busy()
 
 
@@ -676,7 +722,7 @@ section{display:none}section.on{display:block}
    <button class="btn" data-job onclick="run('/api/discover',{group:v('d-group'),city:v('d-city'),limit:v('d-limit')})">Zoeken</button>
   </div></div>
  <div class="card"><h2>2 · Leads verwerken</h2>
-  <p class="hint">Bezoekt de websites (rustig, volgens robots.txt), kijkt naar Instagram en advertenties en geeft elke lead een score op 100. Alleen nieuwe leads worden verwerkt.</p>
+  <p class="hint">Gebeurt automatisch na het zoeken. Deze knop is alleen nodig om een onderbroken verwerking af te maken. Bezoekt de websites (rustig, volgens robots.txt), kijkt naar Instagram en advertenties en geeft elke lead een score op 100. Alleen nieuwe leads worden verwerkt.</p>
   <div class="row"><button class="btn" data-job onclick="run('/api/pipeline',{})">Verwerken</button>
   <button class="btn sec" data-job onclick="run('/api/rescore',{})">Alles opnieuw scoren</button></div></div>
  <div class="card"><h2>3 · Overzicht downloaden</h2>
@@ -684,12 +730,9 @@ section{display:none}section.on{display:block}
   <a class="btn" href="/download/leads.xlsx">Download Excel</a></div>
 </section>
 
-<section id="s-leads"><div class="card"><h2>Beste leads</h2>
- <p class="hint">Gerangschikt op score, maandelijks potentieel en contentbehoefte. ★ = top 50.</p>
- <div class="tbl"><table><thead><tr><th>#</th><th>Score</th><th>Bedrijf</th><th>Contact</th><th>Salesinsteek</th><th></th></tr></thead>
- <tbody id="top"></tbody></table></div></div>
- <div class="card"><h2>Alle leads</h2>
-  <p class="hint">Ook leads zonder e-mail of Instagram, nog niet verwerkte en uitgesloten leads, met de reden.</p>
+<section id="s-leads">
+ <div class="card"><h2>Leads</h2>
+  <p class="hint">Standaard zie je de <b>schone lijst</b>: verwerkt, prioriteit hoog of interessant, en bereikbaar via e-mail of Instagram, gesorteerd op score (★ = top 50). Kies bij "Toon" voor alle andere leads, met de reden waarom ze er niet in staan.</p>
   <div class="row" style="margin-bottom:10px">
    <label>Toon<select id="al-filter" onchange="loadAll()"></select></label>
    <label>Sector<select id="al-sector" onchange="loadAll()"><option value="">alle sectoren</option></select></label>
@@ -730,6 +773,11 @@ section{display:none}section.on{display:block}
  <p class="hint">Alles is optioneel. Zonder sleutel gebruikt de app gratis alternatieven of laat ze het veld op 'onbekend'. Sleutels worden nooit opnieuw getoond. Lokaal staan ze in het bestand .env op je computer; in de online versie in je eigen database.</p>
  <div class="grid2" id="settings"></div>
  <div class="row" style="margin-top:14px"><button class="btn" onclick="saveSettings()">Bewaren</button></div></div>
+ <div class="card" id="importcard"><h2>Gegevens importeren of bewaren</h2>
+  <p class="hint">Importeer een leadsbestand (.db), bijvoorbeeld een reservekopie of een bestand dat je van Claude kreeg. Je huidige gegevens worden eerst als reservekopie bewaard.</p>
+  <div class="row"><input type="file" id="imp-file" accept=".db">
+  <button class="btn" onclick="doImport()">Importeren</button>
+  <a class="btn sec" href="/download/backup.db">Reservekopie downloaden</a></div></div>
  <div class="card"><h2>Opnieuw beginnen</h2>
   <p class="hint">Wist alle leads, scores, concept-mails en de Instagram-wachtrij. Je instellingen blijven staan. Wie al een mail of DM kreeg of zich uitschreef, wordt ook daarna nooit opnieuw benaderd. Lokaal wordt eerst een reservekopie gemaakt; download voor de zekerheid ook de Excel.</p>
   <div class="row"><a class="btn sec" href="/download/leads.xlsx">Download Excel</a>
@@ -746,9 +794,9 @@ async function post(url,body){const r=await fetch(url,{method:"POST",headers:{"C
 async function run(url,body){const j=await post(url,body);if(j.ok)toast("Gestart — volg de voortgang bovenaan")}
 function setTab(t){tab=t;localStorage.setItem("fh-tab",t);render();if(t=="leads")loadAll()}
 async function loadAll(){
- const p=new URLSearchParams({filter:$("al-filter").value||"alle",sector:$("al-sector").value,q:$("al-q").value});
+ const p=new URLSearchParams({filter:$("al-filter").value||"schoon",sector:$("al-sector").value,q:$("al-q").value});
  const r=await fetch("/api/leads?"+p);if(!r.ok)return;const d=await r.json();
- const cur=$("al-filter").value||"alle";
+ const cur=$("al-filter").value||"schoon";
  $("al-filter").innerHTML=Object.entries(d.filters).map(([k,l])=>`<option value="${k}" ${k==cur?"selected":""}>${esc(l)} (${d.counts[k]})</option>`).join("");
  $("al-total").textContent=d.total>d.rows.length?`${d.total} leads, de eerste ${d.rows.length} worden getoond.`:`${d.total} lead(s).`;
  const link=(u,t)=>u?`<a href="${esc(u)}" target="_blank">${esc(t)}</a>`:'<span class="muted">—</span>';
@@ -757,7 +805,7 @@ async function loadAll(){
   const ig=r.instagram?link(r.instagram,"@"+(r.instagram.split("instagram.com/")[1]||"").replace(/\/$/,"")):'<span class="muted">—</span>';
   const act=r.removed?`<button class="btn sec" onclick="post('/api/leads/restore',{id:${r.id}}).then(loadAll)">Terugzetten</button>`
    :r.excluded?"":`<button class="btn sec" title="Verwijderen" onclick="if(confirm('Verwijderen?'))post('/api/leads/remove',{id:${r.id}}).then(loadAll)">✕</button>`;
-  return `<tr><td><b>${esc(r.name)}</b><br><span class="muted">${esc(r.city||"")} · ${esc(r.sector)}${r.category?" · "+esc(r.category):""}</span></td>
+  return `<tr><td>${r.top50?"★ ":""}<b>${esc(r.name)}</b><br><span class="muted">${esc(r.city||"")} · ${esc(r.sector)}${r.category?" · "+esc(r.category):""}</span>${r.insteek?`<div style="font-size:13px;margin-top:4px;max-width:420px">${esc(r.insteek)}</div>`:""}</td>
    <td>${link(r.website,"website")}</td><td>${r.email?esc(r.email):'<span class="muted">—</span>'}</td><td>${ig}</td>
    <td>${r.phone?esc(r.phone):'<span class="muted">—</span>'}</td>
    <td>${r.reviews?`${esc(r.rating||"")}★ · ${esc(r.reviews)}`:'<span class="muted">—</span>'}</td>
@@ -769,7 +817,7 @@ function render(){
  $("nav").innerHTML=TABS.map(([k,l])=>`<button class="${k==tab?"on":""}" onclick="setTab('${k}')">${l}</button>`).join("");
  document.querySelectorAll("section").forEach(s=>s.classList.toggle("on",s.id=="s-"+tab));
  if(!S)return;
- $("sub").textContent=`werkgebied: ${S.region}`+(S.hosted?" · online":"");$("logout").style.display=S.login?"":"none";$("upd").style.display=S.hosted?"none":"";
+ $("sub").textContent=`werkgebied: ${S.region}`+(S.hosted?" · online":"");$("logout").style.display=S.login?"":"none";$("importcard").style.display=S.hosted?"none":"";$("upd").style.display=S.hosted?"none":"";
  $("upd").title=S.version?"versie "+S.version:"";$("src").textContent=S.source;
  const total=S.groups.reduce((a,g)=>a+(g.quota?g.count:0),0);
  $("stats").innerHTML=S.groups.filter(g=>g.quota).map(g=>`<div class="stat"><b>${g.count} <span>/ ${g.quota}</span></b><span>${esc(g.label)}</span><div class="bar"><i style="width:${Math.min(100,g.count/g.quota*100)}%"></i></div></div>`).join("")
@@ -778,11 +826,6 @@ function render(){
  $("jobname").innerHTML=j.name?`${j.running?"⏳":(j.error?"✗":"✓")} ${esc(j.name)}${j.running?" — bezig…":(j.error?' — <span class="no">fout</span>':" — klaar")}`:"";
  const L=$("log"),atEnd=L.scrollTop+L.clientHeight>=L.scrollHeight-10;L.textContent=j.log.join("\n");if(atEnd)L.scrollTop=L.scrollHeight;
  document.querySelectorAll("button[data-job]").forEach(b=>b.disabled=j.running);
- $("top").innerHTML=S.top.length?S.top.map(r=>`<tr><td>${r.top50?"★ ":""}${r.rank}</td><td><b>${r.score}</b><br><span class="pill ${r.priority}">${r.priority}</span></td>
-  <td><b>${esc(r.name)}</b><br><span class="muted">${esc(r.city||"")}</span>${r.website?`<br><a href="${esc(r.website)}" target="_blank">website</a>`:""}</td>
-  <td>${r.email?esc(r.email)+"<br>":""}${r.instagram?`<a href="${esc(r.instagram)}" target="_blank">Instagram</a>`:""}</td><td>${esc(r.insteek||"")}</td>
-  <td><button class="btn sec" title="Lead verwijderen" onclick="if(confirm('${esc(r.name).replace(/'/g,"")} verwijderen?'))post('/api/leads/remove',{id:${r.id}})">✕</button></td></tr>`).join("")
-  :`<tr><td colspan="6" class="muted">Nog geen gescoorde leads. Ga naar Start → zoeken en verwerken.</td></tr>`;
  $("removedcard").style.display=S.removed.length?"":"none";
  $("removed").innerHTML=S.removed.map(r=>`<div class="row" style="justify-content:space-between;border-bottom:1px solid var(--line);padding:6px 0"><span>${esc(r.name)} <span class="muted">${esc(r.city||"")}</span></span><button class="btn sec" onclick="post('/api/leads/restore',{id:${r.id}})">Terugzetten</button></div>`).join("");
  $("sendhint").innerHTML=S.can_send?"Goedkeuren plant de mails in: max. per dag, willekeurig tussen 9u en 17u op werkdagen."+(S.hosted?" Ze vertrekken vanzelf (via de geplande taak) of zodra de app openstaat.":" Laat de app openstaan om ze te laten vertrekken.")
@@ -807,6 +850,11 @@ async function doUpdate(){$("upd").disabled=true;$("upd").textContent="Bezig…"
  const j=await post("/api/update",{});
  if(j.restarting){setTimeout(function w(){fetch("/api/state").then(r=>{if(r.ok)location.reload();else setTimeout(w,1500)}).catch(()=>setTimeout(w,1500))},4000)}
  else{$("upd").disabled=false;$("upd").textContent="Bijwerken"}}
+async function doImport(){const f=$("imp-file").files[0];if(!f){toast("Kies eerst een .db-bestand");return}
+ if(!confirm("Je huidige leads vervangen door "+f.name+"? Er wordt eerst een reservekopie gemaakt."))return;
+ const fd=new FormData();fd.append("file",f);
+ const r=await fetch("/api/import",{method:"POST",headers:{"X-FH":"1"},body:fd});const j=await r.json().catch(()=>({}));
+ if(j.message)toast(j.message);$("imp-file").value="";await load();if(tab=="leads")loadAll()}
 async function resetAll(){const t=prompt("Alle leads wissen? Typ WISSEN om te bevestigen.");
  if(t&&t.trim().toUpperCase()=="WISSEN")await post("/api/reset",{confirm:t})}
 async function saveSettings(){const b={};document.querySelectorAll("#settings input").forEach(i=>{if(i.value.trim())b[i.dataset.key]=i.value});
@@ -815,7 +863,9 @@ async function load(){const r=await fetch("/api/state");if(r.status==401){locati
  if(!$("d-group").dataset.f){$("d-group").innerHTML+=GROUPS.map(g=>`<option value="${g.key}">${esc(g.label)}</option>`).join("");
   $("d-city").innerHTML+=S.cities.map(c=>`<option>${esc(c)}</option>`).join("");$("d-group").dataset.f=1;renderSettings()
   $("al-sector").innerHTML+=GROUPS.map(g=>`<option value="${g.key}">${esc(g.label)}</option>`).join("");if(tab=="leads")loadAll()}
- if(wasRunning&&!S.job.running)toast(S.job.error?"Taak gestopt met een fout — zie het logboek":"Klaar!");wasRunning=S.job.running;render()}
+ if(wasRunning&&!S.job.running){toast(S.job.error?"Taak gestopt met een fout — zie het logboek":"Klaar!");
+  if(!S.job.error&&(S.job.name||"").startsWith("Leads zoeken")){$("al-filter").value="schoon";setTab("leads")}
+  else if(tab=="leads")loadAll()}wasRunning=S.job.running;render()}
 load();setInterval(load,2000);
 </script></body></html>"""
 

@@ -78,3 +78,41 @@ def test_all_leads_view(client):
     assert d["rows"][0]["reason"].startswith("minder dan")
     d = client.get("/api/leads?filter=alle&q=zaak 2", base_url=LOCAL).get_json()
     assert [r["name"] for r in d["rows"]] == ["Zaak 2"]
+    # schone lijst: alleen verwerkt + hoog/interessant + bereikbaar
+    assert client.get("/api/leads", base_url=LOCAL).get_json()["counts"]["schoon"] == 0
+    from formathouse import score
+    for cid in (a, b):
+        db.mark_step(con, cid, "enrich", "ok")
+    db.set_field(con, a, "instagram", "https://www.instagram.com/zaak1/", "feit", source_url="x")
+    db.set_field(con, a, "prijsniveau", "€€€€", "feit", source_url="x")
+    con.commit()
+    score.run(con, log=lambda *_: None)
+    d = client.get("/api/leads", base_url=LOCAL).get_json()
+    assert [r["name"] for r in d["rows"]] == ["Zaak 1"]       # Zaak 2: geen contact
+
+
+def test_import_and_backup(client, tmp_path):
+    import io
+    import os
+    import sqlite3
+
+    from formathouse import db, discover
+    from formathouse.briefing import CITIES, GROUPS
+    if os.getenv("DATABASE_URL"):
+        return  # importeren is alleen lokaal (SQLite)
+    src = tmp_path / "pilot.db"
+    con = db.connect(src)
+    discover.ingest(con, discover.Candidate(source="google", source_id="i1", source_url="x",
+                    name="Pilotzaak", postal_code="2000", country="BE", website="https://p.be",
+                    reviews=500), GROUPS["horeca"], "t", CITIES[0])
+    con.close()
+    r = client.post("/api/import", data={"file": (io.BytesIO(b"geen database"), "x.db")},
+                    headers=H, base_url=LOCAL, content_type="multipart/form-data")
+    assert r.status_code == 400
+    r = client.post("/api/import", data={"file": (open(src, "rb"), "pilot.db")},
+                    headers=H, base_url=LOCAL, content_type="multipart/form-data")
+    assert r.get_json()["ok"] and "1 leads" in r.get_json()["message"]
+    d = client.get("/api/leads?filter=alle", base_url=LOCAL).get_json()
+    assert [x["name"] for x in d["rows"]] == ["Pilotzaak"]
+    b = client.get("/download/backup.db", base_url=LOCAL)
+    assert b.status_code == 200 and b.data[:15] == b"SQLite format 3"

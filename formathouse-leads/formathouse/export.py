@@ -157,6 +157,11 @@ def export(con: sqlite3.Connection, out_dir: Path, *, include_excluded: bool = F
     wb = Workbook()
     _lead_sheet(wb.active, rows, include_excluded)
     wb.active.title = "Alle leads"
+    def clean(c, fields):
+        v = lambda k: fields[k]["value"] if k in fields else None  # noqa: E731
+        return (not c["excluded"] and v("prioriteit") in ("hoog", "interessant")
+                and (v("algemeen_email") or v("instagram")))
+    _lead_sheet(wb.create_sheet("Schone lijst"), [x for x in rows if clean(*x)], False)
     _lead_sheet(wb.create_sheet("Top 50"), [x for x in rows if x[0]["top50"]], False)
 
     # ── E-mail outreach ──
