@@ -41,8 +41,21 @@ def migrate_old_data() -> list[str]:
     return moved
 
 
-load_dotenv(PROJECT_ROOT / ".env")   # oude plek (achterwaarts compatibel)
-load_dotenv(ENV_PATH, override=True)
+def load_env_files() -> None:
+    """Lees .env uit de app-map (meegeleverd) en uit de datamap (jouw instellingen).
+    Een ingevulde waarde wint altijd van een lege; de datamap wint van de app-map."""
+    from dotenv import dotenv_values
+    merged: dict[str, str] = {}
+    for path in (PROJECT_ROOT / ".env", ENV_PATH):
+        if path.exists():
+            for k, v in dotenv_values(path).items():
+                if v not in (None, ""):
+                    merged[k] = v
+    for k, v in merged.items():
+        os.environ[k] = v
+
+
+load_env_files()
 
 
 def save_env(updates: dict[str, str], path: Path | None = None) -> None:
@@ -62,7 +75,7 @@ def save_env(updates: dict[str, str], path: Path | None = None) -> None:
         path.chmod(0o600)
     except OSError:
         pass
-    load_dotenv(path, override=True)
+    load_env_files()
 
 
 def hosted() -> bool:
@@ -123,7 +136,7 @@ class Settings:
 
     @classmethod
     def load(cls) -> "Settings":
-        load_dotenv(ENV_PATH, override=True)
+        load_env_files()
         overrides = _db_settings()
 
         def get(name: str, default=None):
