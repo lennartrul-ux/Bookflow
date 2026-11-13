@@ -166,7 +166,8 @@ def guard():
         return None  # beschermd met CRON_TOKEN
     if not _password():
         host = (request.host or "").split(":")[0]
-        if host not in ("127.0.0.1", "localhost"):
+        # FH_ALLOW_ANY_HOST=1: alleen voor een voorbeeldweergave achter een vertrouwde proxy.
+        if host not in ("127.0.0.1", "localhost") and os.getenv("FH_ALLOW_ANY_HOST") != "1":
             abort(403)
     elif request.path not in ("/login", "/healthz") and not session.get("ok"):
         if request.path.startswith("/api/"):
