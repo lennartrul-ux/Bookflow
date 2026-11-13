@@ -6,3 +6,5 @@ __pycache__/
 .pytest_cache/
 *.egg-info/
 .venv/
+.fh_version
+.formathouse_oud/
