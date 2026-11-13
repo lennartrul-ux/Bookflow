@@ -186,6 +186,11 @@ def healthz():
     return "ok"
 
 
+@app.get("/api/whoami")
+def whoami():
+    return jsonify({"app": "formathouse-leads"})
+
+
 @app.post("/api/shutdown")
 def api_shutdown():
     """Lokaal: laat een nieuwere versie de oude, nog draaiende app afsluiten."""
@@ -719,38 +724,57 @@ def main(open_browser: bool | None = None) -> None:
         open_browser = "--no-browser" not in sys.argv
     migrate_old_data()
     s, _con = _ctx()
-    url = f"http://127.0.0.1:{PORT}/"
-    print(f"\n  The Format House · Leads draait op {url}\n  Sluit dit venster om de app te stoppen.\n")
-    if open_browser:
-        threading.Timer(1.2, lambda: webbrowser.open(url)).start()
     import logging
     import flask.cli
     logging.getLogger("werkzeug").setLevel(logging.ERROR)
     flask.cli.show_server_banner = lambda *a, **k: None
-    def port_in_use() -> bool:
-        import socket
-        with socket.socket() as sock:
-            return sock.connect_ex(("127.0.0.1", PORT)) == 0
+    import socket
 
-    if port_in_use():
-        # er draait al een (mogelijk oudere) versie: vraag die af te sluiten en neem over
-        print("  Er draait nog een oudere app — die wordt afgesloten…")
+    import requests
+
+    def in_use(port: int) -> bool:
+        with socket.socket() as sock:
+            return sock.connect_ex(("127.0.0.1", port)) == 0
+
+    def is_ours(port: int) -> bool:
         try:
-            import requests
-            requests.post(url + "api/shutdown", headers={"X-FH": "1"}, timeout=3,
-                          proxies={"http": None, "https": None})
+            r = requests.get(f"http://127.0.0.1:{port}/api/whoami", timeout=1.5,
+                             proxies={"http": None, "https": None})
+            return r.ok and r.json().get("app") == "formathouse-leads"
         except Exception:
-            pass
-        for _ in range(20):
-            if not port_in_use():
+            return False
+
+    port = None
+    for candidate in range(PORT, PORT + 40):
+        if not in_use(candidate):
+            port = candidate
+            break
+        if is_ours(candidate):
+            # een (oudere) versie van deze app: vraag die af te sluiten en neem de poort over
+            print("  Er draait nog een oudere versie van de app — die wordt afgesloten…")
+            try:
+                requests.post(f"http://127.0.0.1:{candidate}/api/shutdown", headers={"X-FH": "1"},
+                              timeout=3, proxies={"http": None, "https": None})
+            except Exception:
+                pass
+            for _ in range(20):
+                if not in_use(candidate):
+                    break
+                time.sleep(0.25)
+            if not in_use(candidate):
+                port = candidate
                 break
-            time.sleep(0.25)
-        else:
-            print("  De app draait al in een ander venster — ik open die in je browser.")
-            if open_browser:
-                webbrowser.open(url)
-            return
-    app.run(host="127.0.0.1", port=PORT, debug=False, use_reloader=False, threaded=True)
+        # anders: poort in gebruik door een ander programma → volgende proberen
+    if port is None:
+        print("  Geen vrije poort gevonden (8765–8804). Sluit andere programma's en probeer opnieuw.")
+        return
+    url = f"http://127.0.0.1:{port}/"
+    if port != PORT:
+        print(f"  Poort {PORT} is bezet door een ander programma; de app gebruikt poort {port}.")
+    print(f"\n  The Format House · Leads draait op {url}\n  Sluit dit venster om de app te stoppen.\n")
+    if open_browser:
+        threading.Timer(1.2, lambda: webbrowser.open(url)).start()
+    app.run(host="127.0.0.1", port=port, debug=False, use_reloader=False, threaded=True)
 
 
 if __name__ == "__main__":
