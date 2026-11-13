@@ -17,8 +17,24 @@ WINDOWS
    (vink "Add Python to PATH" aan).
 2. Dubbelklik op "Start Format House.bat".
 
+AUTOMATISCH BIJWERKEN (eenmalig instellen)
+De app controleert bij elke start of er een nieuwe versie is en installeert die zelf.
+Je data blijft altijd bewaard: die staat apart in Documenten/Format House Leads.
+Omdat de code in een privé-repository staat, heeft de app één keer een leessleutel nodig:
+1. Ga naar https://github.com/settings/personal-access-tokens/new
+2. Naam: "Format House updates" · Vervaldatum: kies bv. 1 jaar.
+3. Repository access: "Only select repositories" → kies "Bookflow".
+4. Permissions → Repository permissions → "Contents": Read-only.
+5. Klik op "Generate token" en kopieer de code (begint met github_pat_).
+6. Plak die in de app: Instellingen → "GitHub-token" → Bewaren.
+Daarna volstaat de knop "Bijwerken" rechtsboven, of gewoon de app opnieuw starten.
+
 IN DE APP
-- Start: leads zoeken → verwerken → Excel downloaden.
+- Start: leads zoeken (kies een sector en stad) → verwerken → Excel downloaden.
+  Sectoren: horeca, fitness/wellness/beauty, lifestyle, immokantoren, verzekeringsmakelaars,
+  keuken/badkamer/interieur, architecten/aannemers, esthetische klinieken/tandartsen,
+  padel/golf, trouw- en eventlocaties, ambachtelijke food, tuinaanleggers/zwembaden,
+  premium autodealers.
 - Leads: de beste leads met score en salesinsteek (★ = top 50).
 - E-mail: concept-mails maken, bekijken en goedkeuren. Niets vertrekt zonder jouw goedkeuring.
 - Instagram: de DM's van vandaag, met knoppen om het profiel te openen, de tekst te kopiëren

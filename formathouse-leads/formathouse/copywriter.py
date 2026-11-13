@@ -15,6 +15,14 @@ SECTOR_HOOK = {
     "lifestyle": "jullie collecties en lanceringen",
     "immo": "jullie panden, de buurt en het team",
     "verzekering": "jullie advies en het team achter het kantoor",
+    "interieur": "jullie projecten, van ontwerp tot eindresultaat",
+    "bouw": "jullie projecten en werven, van eerste steen tot oplevering",
+    "esthetiek": "jullie behandelingen, resultaten en team",
+    "padelgolf": "jullie club, lessen en events",
+    "events": "jullie locatie, de sfeer en de events",
+    "food": "jullie producten, het ambacht en de winkels",
+    "tuin": "jullie tuinen en zwembaden, van ontwerp tot resultaat",
+    "auto": "jullie wagens, leveringen en team",
 }
 
 EMAIL_SCHEMA = {

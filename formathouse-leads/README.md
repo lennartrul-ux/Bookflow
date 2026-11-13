@@ -12,6 +12,21 @@ De app heeft tabbladen voor alle stappen: Start (zoeken, verwerken, Excel), Lead
 Instagram en Instellingen (sleutels invullen). Zolang de app openstaat, vertrekken
 goedgekeurde mails automatisch op hun geplande tijdstip.
 
+## Updates en je data
+- **Data:** leads, instellingen (`.env`) en exports staan in `Documenten/Format House Leads`, los van de app. Een update raakt ze nooit.
+- **Updates:** bij elke start haalt de app de nieuwste versie van GitHub (`formathouse/updater.py`). Ook de knop "Bijwerken" doet dat, waarna de app zichzelf herstart.
+- **Privé-repository:** vul één keer een GitHub-token met alleen leesrechten in bij Instellingen. Zie `LEES MIJ.txt`.
+
+## Sectoren en filters
+- **Sectoren:** horeca, fitness/wellness/beauty, lifestyle, immo, verzekeringsmakelaars, interieur, bouw, esthetiek, padel/golf, events, food, tuin, auto en overig (op aanvraag). Zie `formathouse/briefing.py`.
+- **Altijd geweerd:**
+  - grote ketens;
+  - snackzaken en kroegen (horeca);
+  - sportclubs zoals voetbal en tennis (fitness);
+  - bankkantoren (verzekeringen);
+  - zaken zonder eigen website (alleen Facebook of een boekingsplatform telt niet).
+- **Geen social media:** vindt de app na het websitebezoek geen enkele link naar Instagram, TikTok, Facebook of LinkedIn, dan wordt de lead uitgesloten.
+
 ## Gratis online (via een link, met wachtwoord)
 Zie **`ONLINE ZETTEN.txt`**. In het kort:
 - **Render** (gratis) draait de app.

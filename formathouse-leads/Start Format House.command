@@ -22,5 +22,10 @@ if [ ! -x .venv/bin/python ] || [ ! -f .venv/.installed ] || [ pyproject.toml -n
   .venv/bin/python -m pip install -q -e . || { echo ""; echo "  Installatie mislukt. Stuur een screenshot van dit venster."; read -r -n1; exit 1; }
   touch .venv/.installed
 fi
-[ -f .env ] || cp .env.example .env
+echo "  Controleren op updates…"
+.venv/bin/python -m formathouse.updater
+if [ $? -eq 3 ]; then
+  echo "  Nieuwe onderdelen installeren…"
+  .venv/bin/python -m pip install -q -e . && touch .venv/.installed
+fi
 .venv/bin/python -m formathouse.webapp

@@ -24,7 +24,9 @@ BUDGETS = ["< €1.500/maand", "€1.500–€2.500/maand", "€2.500–€5.000
            "> €5.000/maand", "onbekend"]
 PRIORITY_GROUPS = {"horeca", "fitness", "lifestyle"}
 # Basispunten 'maandelijks potentieel' per sector (vastgoed: elk pand is nieuwe content).
-POTENTIAL_BASE = {"horeca": 10, "fitness": 10, "lifestyle": 10, "immo": 10, "verzekering": 6}
+POTENTIAL_BASE = {"horeca": 10, "fitness": 10, "lifestyle": 10, "immo": 10, "verzekering": 6,
+                  "interieur": 9, "bouw": 8, "esthetiek": 10, "padelgolf": 9, "events": 10,
+                  "food": 9, "tuin": 8, "auto": 9}
 
 BRIEFING = """\
 The Format House is een Belgisch creatief content agency voor professionele short-form video
@@ -198,7 +200,7 @@ def score_with_rules(payload: dict) -> dict:
         need += 8; nwhy.append("Instagram-activiteit onbekend: neutraal (+8)")
     if known("instagram"):
         need += 4; nwhy.append("Instagram-profiel aanwezig (+4)")
-    if group in PRIORITY_GROUPS or group == "immo":
+    if group in POTENTIAL_BASE and group != "verzekering":
         need += 4; nwhy.append("sector met terugkerende contentbehoefte (+4)")
 
     # Maandelijks potentieel (20)
@@ -252,6 +254,14 @@ def score_with_rules(payload: dict) -> dict:
         "lifestyle": "Breng collecties en lanceringen tot leven met een vaste stroom productvideo's en Reels",
         "immo": "Laat elk pand, de buurt en het team zien in korte video's die sneller kopers en huurders aantrekken",
         "verzekering": "Maak advies tastbaar met korte, herkenbare uitlegvideo's en geef het kantoor een gezicht",
+        "interieur": "Toon elk project van ontwerp tot oplevering met voor/na-video's die nieuwe klanten overtuigen",
+        "bouw": "Maak van elke werf content: korte projectvideo's en updates die vertrouwen en aanvragen opleveren",
+        "esthetiek": "Laat resultaten, behandelingen en het team zien in korte, betrouwbare video's",
+        "padelgolf": "Breng de club tot leven met lessen, events en community in een vaste stroom Reels",
+        "events": "Laat de locatie elke week verkopen met sfeervideo's van trouwfeesten en events",
+        "food": "Vertel het ambacht achter de producten met korte video's uit atelier en winkel",
+        "tuin": "Toon tuinen en zwembaden van ontwerp tot resultaat in voor/na-video's",
+        "auto": "Zet nieuwe wagens, leveringen en het team in de kijker met korte, strakke video's",
     }.get(group, "Bouw een vaste stroom short-form video rond jullie aanbod")
     insteek = angle + (f". Aanknopingspunt: {signals[0]}." if signals else ".")
 
@@ -273,6 +283,14 @@ def score_with_rules(payload: dict) -> dict:
             "lifestyle": "Productvideo's, lanceringen en behind-the-scenes",
             "immo": "Pandvideo's en -tours, buurtvideo's, team en 'te koop/verkocht'-Reels",
             "verzekering": "Korte uitlegvideo's, klantverhalen en team",
+            "interieur": "Voor/na-video's, projecttours, maatwerk in beeld",
+            "bouw": "Projectvideo's, werfupdates, opleveringen",
+            "esthetiek": "Resultaten (voor/na), uitleg van behandelingen, team",
+            "padelgolf": "Lessen, toernooien, events en community",
+            "events": "Sfeervideo's van trouwfeesten, events en de locatie",
+            "food": "Ambacht in het atelier, nieuwe producten, seizoenscollecties",
+            "tuin": "Voor/na-video's, projecttours, seizoensinspiratie",
+            "auto": "Nieuwe modellen, leveringen, walkarounds",
         }.get(group, "Terugkerende short-form video rond aanbod en team"),
         "beslisser_functie": "zaakvoerder of marketingverantwoordelijke",
         "salesinsteek": insteek,
@@ -323,6 +341,18 @@ def rank(con: sqlite3.Connection, top_n: int = 50) -> int:
     return min(top_n, sum(1 for r in rows if not r[0]))
 
 
+SOCIAL_FIELDS = ("instagram", "tiktok", "facebook", "linkedin")
+
+
+def _no_socials(con: sqlite3.Connection, cid: int) -> bool:
+    """Alleen True als de website echt bezocht werd en er geen enkele social link was."""
+    step = con.execute("SELECT status FROM pipeline WHERE company_id=? AND step='enrich'",
+                       (cid,)).fetchone()
+    if not step or step[0] != "ok":
+        return False
+    return not any(db.value(con, cid, f) for f in SOCIAL_FIELDS)
+
+
 def run(con: sqlite3.Connection, *, api_key: str = "", model: str = "claude-opus-5-5",
         client=None, limit: int | None = None, redo: bool = False,
         log: Callable = print) -> dict[str, int]:
@@ -352,6 +382,10 @@ def run(con: sqlite3.Connection, *, api_key: str = "", model: str = "claude-opus
             stats["fout"] += 1
             log(f"  ✗ {c['name']}: {e!r}")
             continue
+        if _no_socials(con, c["id"]) and not data.get("uitsluiten"):
+            data["uitsluiten"] = True
+            data["uitsluitreden"] = "geen social-media-aanwezigheid gevonden op de website"
+            data["prioriteit"] = "uitgesloten"
         store(con, c["id"], data, method)
         db.mark_step(con, c["id"], "score", "ok", method)
         log(f"  {data['totaal']:>3}  {data['prioriteit']:12} {c['name']}")

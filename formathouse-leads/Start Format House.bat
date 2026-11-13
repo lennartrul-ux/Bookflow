@@ -10,7 +10,9 @@ echo   Eerste keer: alles installeren (1 a 2 minuten)...
 %PY% -m venv .venv || goto nopy
 .venv\Scripts\python -m pip install -q -e . || goto fail
 :run
-if not exist .env copy .env.example .env >nul
+echo   Controleren op updates...
+.venv\Scripts\python -m formathouse.updater
+if errorlevel 3 .venv\Scripts\python -m pip install -q -e .
 .venv\Scripts\python -m formathouse.webapp
 goto end
 :nopy

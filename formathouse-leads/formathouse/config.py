@@ -8,8 +8,41 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-ENV_PATH = PROJECT_ROOT / ".env"
-load_dotenv(ENV_PATH)
+
+
+def _data_dir() -> Path:
+    """Vaste map voor je data (leads, instellingen, exports), los van de app-code,
+    zodat een nieuwe versie van de app er nooit aan komt."""
+    custom = os.getenv("FH_DATA_DIR", "").strip()
+    if custom:
+        return Path(custom).expanduser()
+    docs = Path.home() / "Documents"
+    return (docs if docs.exists() else Path.home()) / "Format House Leads"
+
+
+DATA_DIR = _data_dir()
+ENV_PATH = DATA_DIR / ".env"
+
+
+def migrate_old_data() -> list[str]:
+    """Eenmalig: .env / leads.db / output uit de app-map naar de datamap verplaatsen."""
+    import shutil
+    moved = []
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return moved
+    for name in (".env", "leads.db", "output"):
+        old, new = PROJECT_ROOT / name, DATA_DIR / name
+        if old.exists() and not new.exists() and not (name == "output" and not any(
+                p.name != ".gitkeep" for p in old.iterdir())):
+            shutil.copytree(old, new) if old.is_dir() else shutil.copy2(old, new)
+            moved.append(name)
+    return moved
+
+
+load_dotenv(PROJECT_ROOT / ".env")   # oude plek (achterwaarts compatibel)
+load_dotenv(ENV_PATH, override=True)
 
 
 def save_env(updates: dict[str, str], path: Path | None = None) -> None:
@@ -96,9 +129,9 @@ class Settings:
         def get(name: str, default=None):
             v = overrides.get(name)
             return v if v not in (None, "") else os.getenv(name, default)
-        def p(name: str, default: str) -> Path:
+        def p(name: str, default: str) -> Path:  # relatieve paden: t.o.v. de datamap
             v = Path(get(name) or default)
-            return v if v.is_absolute() else PROJECT_ROOT / v
+            return v if v.is_absolute() else DATA_DIR / v
 
         return cls(
             google_places_api_key=get("GOOGLE_PLACES_API_KEY", "").strip(),

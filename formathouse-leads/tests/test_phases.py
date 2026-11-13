@@ -379,7 +379,7 @@ def test_new_sector_groups(con):
     assert '"office"="insurance"' in discover.overpass_query("verzekering", ANTWERPEN)
     bank = discover.Candidate(source="google", source_id="b1", source_url="x", name="KBC Antwerpen Meir",
                               postal_code="2000", country="BE", website="https://kbc.be", reviews=50)
-    assert discover.evaluate(bank, GROUPS["verzekering"])[1].startswith("grote keten")
+    assert discover.evaluate(bank, GROUPS["verzekering"])[0] is False
     makelaar = discover.Candidate(source="google", source_id="m1", source_url="x",
                                   name="Verzekeringen Peeters", postal_code="2000", country="BE",
                                   website="https://peeters.be", reviews=20)
@@ -450,3 +450,53 @@ def test_email_on_privacy_page(con):
     enrich.run(con, crawler, log=lambda *_: None)
     assert db.value(con, cid, "algemeen_email") == "info@testzaak1.be"
     assert "https://testzaak1.be/contact" in web.requested       # standaardpad geprobeerd
+
+
+
+def _cand(name, website="https://zaak.be", category=None, **kw):
+    return discover.Candidate(source="osm", source_id=name, source_url="x", name=name,
+                              postal_code="2000", country="BE", website=website,
+                              category=category, **kw)
+
+
+def test_stricter_filters():
+    fit, hor = GROUPS["fitness"], GROUPS["horeca"]
+    assert discover.evaluate(_cand("Reform Pilates Studio"), fit)[0]
+    for name in ("KFC Duffel Voetbal", "Tennisclub Schilde", "TC Berchem", "Basic-Fit Meir",
+                 "Passage Fitness Wilrijk"):
+        assert not discover.evaluate(_cand(name), fit)[0], name
+    assert not discover.evaluate(_cand("Zaal X", category="Sporthal"), fit)[0]
+    assert not discover.evaluate(_cand("Frituur De Kroon"), hor)[0]
+    assert not discover.evaluate(_cand("Istanbul Kebab"), hor)[0]
+    assert discover.evaluate(_cand("Bar Bistro Nova"), hor)[0]
+    fb = _cand("Bistro Fb", website="https://www.facebook.com/bistrofb")
+    assert discover.evaluate(fb, hor)[1].startswith("geen eigen website")
+    ig = _cand("Bistro Ig", website="https://www.instagram.com/bistroig/")
+    assert discover.evaluate(ig, hor)[0]                        # IG → later website/e-mail zoeken
+    # autodealer: brand-tag = automerk, geen keten
+    dealer = _cand("Garage Peeters", is_chain_tag=True)
+    assert discover.evaluate(dealer, GROUPS["auto"])[0]
+    assert not discover.evaluate(dealer, GROUPS["lifestyle"])[0]
+
+
+def test_all_groups_have_osm_filters_and_copy():
+    from formathouse.copywriter import SECTOR_HOOK
+    for key in GROUPS:
+        assert discover.OSM_FILTERS.get(key), key
+        q = discover.overpass_query(key, ANTWERPEN)
+        assert q.count("(") == q.count(")"), key
+    for key in ("interieur", "bouw", "esthetiek", "padelgolf", "events", "food", "tuin", "auto"):
+        assert key in SECTOR_HOOK and key in score.POTENTIAL_BASE, key
+
+
+def test_no_socials_excluded_after_crawl(con):
+    cid = add_company(con, 1)
+    crawler, _ = make_crawler(con, {"https://testzaak1.be": "<html><p>Welkom</p></html>"})
+    enrich.run(con, crawler, log=lambda *_: None)
+    score.run(con, log=lambda *_: None)
+    row = con.execute("SELECT priority, rank FROM scores WHERE company_id=?", (cid,)).fetchone()
+    assert row[0] == "uitgesloten" and row[1] is None
+    # niet bezocht (geen enrich) → niet uitgesloten om die reden
+    cid2 = add_company(con, 2)
+    score.run(con, log=lambda *_: None)
+    assert con.execute("SELECT priority FROM scores WHERE company_id=?", (cid2,)).fetchone()[0] != "uitgesloten"

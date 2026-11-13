@@ -17,7 +17,7 @@ from typing import Callable
 import requests
 
 from . import db
-from .briefing import CITIES, DEFAULT_REGION, GROUPS, REGIONS, City, SectorGroup, in_region
+from .briefing import _CHAINS, CITIES, DEFAULT_REGION, GROUPS, REGIONS, City, SectorGroup, in_region
 from .httpclient import LoggedClient
 from .normalize import company_domain, norm_text, social_platform
 
@@ -43,12 +43,14 @@ PRICE_LEVELS = {
 
 # OpenStreetMap-tags per sectorgroep (één Overpass-query per groep × stad).
 OSM_FILTERS: dict[str, list[str]] = {
-    "horeca": [
-        '["amenity"~"^(restaurant|bar|cafe|pub|biergarten)$"]',
+    "horeca": [  # geen kroegen/snackbars; koffiebars alleen als koffie-/brunchzaak getagd
+        '["amenity"~"^(restaurant|bar)$"]',
+        '["amenity"="cafe"]["cuisine"~"coffee_shop|brunch|breakfast"]',
         '["tourism"~"^(hotel|guest_house)$"]',
     ],
     "fitness": [
-        '["leisure"~"^(fitness_centre|sports_centre)$"]',
+        '["leisure"="fitness_centre"]',
+        '["leisure"="sports_centre"]["sport"~"^(fitness|pilates|yoga|crossfit|boxing|spinning)$"]',
         '["sport"~"^(pilates|yoga|crossfit|fitness)$"]',
         '["shop"~"^(beauty|massage)$"]',
         '["amenity"~"^(spa|public_bath)$"]',
@@ -65,9 +67,17 @@ OSM_FILTERS: dict[str, list[str]] = {
     "verzekering": [
         '["office"="insurance"]',
     ],
+    "interieur": ['["shop"~"^(kitchen|bathroom_furnishing)$"]', '["craft"="kitchen_fitter"]'],
+    "bouw": ['["office"="architect"]', '["craft"~"^(builder|construction)$"]'],
+    "esthetiek": ['["amenity"~"^(dentist|clinic)$"]', '["healthcare"~"^(dentist|clinic)$"]'],
+    "padelgolf": ['["sport"~"^(padel|golf)$"]', '["leisure"="golf_course"]'],
+    "events": ['["amenity"~"^(events_venue|conference_centre)$"]'],
+    "food": ['["shop"~"^(chocolate|pastry|confectionery|coffee)$"]',
+             '["craft"~"^(chocolatier|confectionery|coffee_roaster)$"]'],
+    "tuin": ['["craft"~"^(gardener|landscaper)$"]', '["shop"="swimming_pool"]'],
+    "auto": ['["shop"="car"]["brand"~"Porsche|BMW|Mercedes|Audi|Volvo|Land Rover|Jaguar|Tesla|Lexus|Maserati|Mini", i]'],
     "overig": [
         '["office"~"^(employment_agency|event_management)$"]',
-        '["shop"="car"]',
     ],
 }
 OSM_LABELS = {
@@ -80,7 +90,14 @@ OSM_LABELS = {
     "interior_decoration": "Interieurwinkel", "cosmetics": "Cosmeticawinkel",
     "perfumery": "Parfumerie", "estate_agent": "Vastgoedkantoor",
     "employment_agency": "Uitzend-/recruitmentbureau", "insurance": "Verzekeringskantoor",
-    "property_management": "Vastgoedbeheer", "car": "Autodealer",
+    "property_management": "Vastgoedbeheer", "kitchen": "Keukenzaak",
+    "bathroom_furnishing": "Badkamerzaak", "kitchen_fitter": "Keukenbouwer",
+    "architect": "Architect", "builder": "Aannemer", "construction": "Bouwbedrijf",
+    "dentist": "Tandarts", "clinic": "Kliniek", "padel": "Padel", "golf": "Golf",
+    "golf_course": "Golfbaan", "events_venue": "Eventlocatie", "conference_centre": "Eventlocatie",
+    "chocolate": "Chocolatier", "pastry": "Patisserie", "confectionery": "Banketbakker",
+    "coffee": "Koffiezaak", "chocolatier": "Chocolatier", "coffee_roaster": "Koffiebranderij",
+    "gardener": "Tuinaanlegger", "landscaper": "Tuinaanlegger", "swimming_pool": "Zwembadbouwer", "car": "Autodealer",
     "event_management": "Eventbureau",
 }
 
@@ -108,6 +125,7 @@ class Candidate:
     phone: str | None = None
     operational: bool = True
     is_chain_tag: bool = False  # OSM 'brand'-tag
+    platform_only: bool = False  # alleen Facebook/boekingsplatform als 'website' 
     socials: dict[str, str] = field(default_factory=dict)
 
 
@@ -190,7 +208,8 @@ def overpass_query(group_key: str, city: City) -> str:
 
 def from_osm(el: dict) -> Candidate:
     t = el.get("tags", {})
-    kind = next((t[k] for k in ("amenity", "tourism", "leisure", "shop", "office", "sport")
+    kind = next((t[k] for k in ("amenity", "tourism", "leisure", "shop", "office", "craft",
+                                "healthcare", "sport")
                  if k in t), None)
     street = " ".join(x for x in (t.get("addr:street"), t.get("addr:housenumber")) if x)
     city = t.get("addr:city")
@@ -265,10 +284,17 @@ def evaluate(c: Candidate, group: SectorGroup, region: str = DEFAULT_REGION,
     if not c.operational:
         return False, "niet operationeel volgens de bron"
     low = f" {c.name.lower()} "
-    if c.is_chain_tag or any(p in low for p in group.exclude_name_patterns):
+    if (c.is_chain_tag and group.brand_is_chain) or any(p in low for p in _CHAINS):
         return False, "grote keten (buiten profiel 5–150 medewerkers)"
+    both = f"{low} {(c.category or '').lower()} "
+    for p in group.exclude_name_patterns:
+        if p in both:
+            return False, f"buiten profiel van {group.label.lower()} ('{p.strip()}')"
     if not c.website:
         return False, "geen website in bronprofiel"
+    from .normalize import company_domain as _cd
+    if not _cd(c.website) and social_platform(c.website) not in ("instagram", "tiktok"):
+        return False, "geen eigen website (alleen Facebook- of platformpagina)"
     if c.source == "google" and (c.reviews or 0) < group.min_reviews:
         return False, f"minder dan {group.min_reviews} reviews"
     return True, None

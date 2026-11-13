@@ -22,6 +22,7 @@ from flask import Flask, Response, abort, jsonify, redirect, request, send_file,
 from . import db, discover, enrich, export as export_mod, ig_queue as igq
 from . import outreach, score, social
 from .briefing import CITIES, GROUPS, REGIONS
+from . import config as _config, updater as _updater
 from .config import Settings, hosted, save_settings
 from .httpclient import LoggedClient
 
@@ -260,6 +261,7 @@ SETTING_FIELDS = [
     ("OUTREACH_SIGNATURE", "Handtekening (\\n = nieuwe regel)", False),
     ("OUTREACH_DAILY_MAX", "Max. mails per dag (≤ 30)", False),
     ("CRAWL_USER_AGENT", "User-agent voor websitebezoek", False),
+    ("GITHUB_TOKEN", "GitHub-token (alleen lezen, voor automatische updates)", True),
     ("REGIO", "Werkgebied (vlaanderen / belgie / be_nl)", False),
 ]
 
@@ -306,6 +308,8 @@ def state():
         "active": active, "steps": steps, "top": top, "batches": batches, "ig": ig,
         "ig_counts": ig_counts,
         "can_send": s.can_send, "hosted": hosted(), "login": bool(_password()),
+        "version": (_updater.installed_version() or "")[:7],
+        "data_dir": "" if hosted() else str(_config.DATA_DIR),
         "suppression": con.execute("SELECT COUNT(*) FROM suppression").fetchone()[0],
         "cities": [c.name for c in CITIES if c.region in REGIONS.get(s.region, {"VL"})],
         "source": "Google Places" if s.google_places_api_key else "OpenStreetMap (gratis)",
@@ -327,6 +331,29 @@ def _int(v, default=None):
 
 def _busy():
     return jsonify({"ok": False, "message": f"Er loopt al een taak: {JOB['name']}"}), 409
+
+
+@app.post("/api/update")
+def api_update():
+    """Nieuwste versie ophalen; daarna herstart de app zichzelf."""
+    if hosted():
+        return jsonify({"ok": True, "message": "De online versie werkt zichzelf automatisch bij."})
+    from . import updater
+    Settings.load()  # laadt GITHUB_TOKEN uit je instellingen
+    res = updater.update()
+    if res.status != "bijgewerkt":
+        return jsonify({"ok": res.status == "actueel", "message": res.message})
+
+    def restart():
+        import subprocess
+        import sys
+        time.sleep(1.0)
+        if res.deps_changed:
+            subprocess.run([sys.executable, "-m", "pip", "install", "-q", "-e", str(updater.PROJECT_ROOT)])
+        os.execv(sys.executable, [sys.executable, "-m", "formathouse.webapp", "--no-browser"])
+    threading.Thread(target=restart, daemon=True).start()
+    return jsonify({"ok": True, "restarting": True,
+                    "message": "Nieuwe versie geïnstalleerd — de app herstart (± 10 seconden)."})
 
 
 @app.post("/api/settings")
@@ -506,7 +533,8 @@ section{display:none}section.on{display:block}
 @media (max-width:600px){header,nav,main{padding-left:16px;padding-right:16px}}
 </style></head><body>
 <header><h1>The Format House · Leads</h1><span class="sub" id="sub"></span>
-<button class="btn sec" id="logout" style="margin-left:auto;display:none" onclick="post('/logout',{}).then(()=>location.href='/login')">Uitloggen</button></header>
+<button class="btn sec" id="upd" style="margin-left:auto" onclick="doUpdate()">Bijwerken</button>
+<button class="btn sec" id="logout" style="display:none" onclick="post('/logout',{}).then(()=>location.href='/login')">Uitloggen</button></header>
 <nav id="nav"></nav>
 <main>
 <div class="card" id="jobcard" style="display:none"><h2 id="jobname"></h2><div id="log"></div></div>
@@ -561,6 +589,7 @@ section{display:none}section.on{display:block}
 </section>
 
 <section id="s-set"><div class="card"><h2>Instellingen</h2>
+ <p class="hint" id="datadir"></p>
  <p class="hint">Alles is optioneel. Zonder sleutel gebruikt de app gratis alternatieven of laat ze het veld op 'onbekend'. Sleutels worden nooit opnieuw getoond. Lokaal staan ze in het bestand .env op je computer; in de online versie in je eigen database.</p>
  <div class="grid2" id="settings"></div>
  <div class="row" style="margin-top:14px"><button class="btn" onclick="saveSettings()">Bewaren</button></div></div></section>
@@ -579,7 +608,8 @@ function render(){
  $("nav").innerHTML=TABS.map(([k,l])=>`<button class="${k==tab?"on":""}" onclick="setTab('${k}')">${l}</button>`).join("");
  document.querySelectorAll("section").forEach(s=>s.classList.toggle("on",s.id=="s-"+tab));
  if(!S)return;
- $("sub").textContent=`werkgebied: ${S.region}`+(S.hosted?" · online":"");$("logout").style.display=S.login?"":"none";$("src").textContent=S.source;
+ $("sub").textContent=`werkgebied: ${S.region}`+(S.hosted?" · online":"");$("logout").style.display=S.login?"":"none";$("upd").style.display=S.hosted?"none":"";
+ $("upd").title=S.version?"versie "+S.version:"";$("src").textContent=S.source;
  const total=S.groups.reduce((a,g)=>a+(g.quota?g.count:0),0);
  $("stats").innerHTML=S.groups.filter(g=>g.quota).map(g=>`<div class="stat"><b>${g.count} <span>/ ${g.quota}</span></b><span>${esc(g.label)}</span><div class="bar"><i style="width:${Math.min(100,g.count/g.quota*100)}%"></i></div></div>`).join("")
   +`<div class="stat"><b>${S.steps.score||0}</b><span>gescoord van ${S.active} leads</span></div><div class="stat"><b>${S.rejected}</b><span>afgewezen door voorfilter</span></div>`;
@@ -597,6 +627,7 @@ function render(){
   return `<tr><td>${b.id}</td><td>${b.created}</td><td>${b.leads}</td><td>${esc(c)}</td><td style="white-space:nowrap"><a class="btn sec" href="/download/batch/${b.id}.xlsx">Bekijken</a>
   ${b.status=="concept"?`<button class="btn" ${S.can_send?"":"disabled"} onclick="if(confirm('Batch ${b.id} goedkeuren? De mails worden ingepland en verstuurd.'))run('/api/outreach/approve',{batch:${b.id}})">Goedkeuren</button>`:'<span class="ok">goedgekeurd</span>'}</td></tr>`}).join("")
   :`<tr><td colspan="5" class="muted">Nog geen batches.</td></tr>`;
+ $("datadir").innerHTML=S.data_dir?`Je data (leads, instellingen, exports) staat in <b>${esc(S.data_dir)}</b> en blijft bewaard bij updates.`:"";
  $("supp").textContent=`Suppressielijst: ${S.suppression} adres(sen)/domein(en).`;
  $("igc").textContent=Object.keys(S.ig_counts).length?"Totaal: "+Object.entries(S.ig_counts).map(([k,n])=>`${n} ${k.replace("_"," ")}`).join(" · "):"";
  $("ig").innerHTML=S.ig.length?S.ig.map(r=>`<div class="ig"><b>@${esc(r.handle)}</b> — ${esc(r.name)} <span class="muted">(score ${r.score})</span>
@@ -608,6 +639,10 @@ function render(){
 }
 function renderSettings(){$("settings").innerHTML=S.settings.map(f=>`<label>${esc(f.label)} ${f.set?'<span class="ok">✓ ingesteld</span>':'<span class="muted">niet ingesteld</span>'}
  <input data-key="${f.key}" type="${f.secret?"password":"text"}" placeholder="${f.secret&&f.set?"•••••• (laat leeg om te behouden)":""}" value="${esc(f.value)}"></label>`).join("")}
+async function doUpdate(){$("upd").disabled=true;$("upd").textContent="Bezig…";
+ const j=await post("/api/update",{});
+ if(j.restarting){setTimeout(function w(){fetch("/api/state").then(r=>{if(r.ok)location.reload();else setTimeout(w,1500)}).catch(()=>setTimeout(w,1500))},4000)}
+ else{$("upd").disabled=false;$("upd").textContent="Bijwerken"}}
 async function saveSettings(){const b={};document.querySelectorAll("#settings input").forEach(i=>{if(i.value.trim())b[i.dataset.key]=i.value});
  await post("/api/settings",b);renderSettings()}
 async function load(){const r=await fetch("/api/state");if(r.status==401){location.href="/login";return}S=await r.json();
@@ -618,7 +653,12 @@ load();setInterval(load,2000);
 </script></body></html>"""
 
 
-def main(open_browser: bool = True) -> None:
+def main(open_browser: bool | None = None) -> None:
+    import sys
+    from .config import migrate_old_data
+    if open_browser is None:
+        open_browser = "--no-browser" not in sys.argv
+    migrate_old_data()
     s, _con = _ctx()
     url = f"http://127.0.0.1:{PORT}/"
     print(f"\n  The Format House · Leads draait op {url}\n  Sluit dit venster om de app te stoppen.\n")
