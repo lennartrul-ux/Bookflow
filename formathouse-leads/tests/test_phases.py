@@ -372,3 +372,81 @@ def test_overpass_user_agent_and_mirror(con):
     cands = discover.osm_fetch(client, "horeca", ANTWERPEN, "TestUA/1.0 (+https://x.be)")
     assert [c.name for c in cands] == ["Testbar"]
     assert calls[0][1] == "TestUA/1.0 (+https://x.be)" and len(calls) == 2
+
+
+def test_new_sector_groups(con):
+    assert {"immo", "verzekering"} <= set(GROUPS)
+    assert '"office"="insurance"' in discover.overpass_query("verzekering", ANTWERPEN)
+    bank = discover.Candidate(source="google", source_id="b1", source_url="x", name="KBC Antwerpen Meir",
+                              postal_code="2000", country="BE", website="https://kbc.be", reviews=50)
+    assert discover.evaluate(bank, GROUPS["verzekering"])[1].startswith("grote keten")
+    makelaar = discover.Candidate(source="google", source_id="m1", source_url="x",
+                                  name="Verzekeringen Peeters", postal_code="2000", country="BE",
+                                  website="https://peeters.be", reviews=20)
+    assert discover.evaluate(makelaar, GROUPS["verzekering"]) == (True, None)
+    cid = add_company(con, 1, group="immo")
+    score.run(con, log=lambda *_: None)
+    d = json.loads(con.execute("SELECT detail FROM scores WHERE company_id=?", (cid,)).fetchone()[0])
+    assert "pand" in d["salesinsteek"].lower()
+
+
+def test_email_via_instagram_profile_then_website(con):
+    """Bedrijf zonder website: IG-profiel (officiële API) → website → crawl → e-mail."""
+    cid = add_company(con, 5, website="https://www.instagram.com/testzaak5/")
+    assert db.value(con, cid, "website") is None
+    crawler, _ = make_crawler(con, {})
+    enrich.run(con, crawler, log=lambda *_: None)            # nog geen website → overgeslagen
+
+    class Graph:
+        def request(self, method, url, params=None, **kw):
+            data = ({"data": []} if "ads_archive" in url else
+                    {"business_discovery": {"website": "https://testzaak1.be", "biography": "Welkom!",
+                                            "followers_count": 900, "media_count": 80,
+                                            "media": {"data": []}}})
+            return SimpleNamespace(status_code=200, json=lambda: data, headers={},
+                                   content=b"{}", text="")
+    from formathouse.httpclient import LoggedClient
+    social.run(con, LoggedClient(con, "meta_graph", min_interval=0, session=Graph()),
+               version="v23.0", ig_user_id="1", token="T", log=lambda *_: None)
+    assert db.value(con, cid, "website") == "https://testzaak1.be"
+    crawler, _ = make_crawler(con, {"https://testzaak1.be": HOME,
+                                    "https://testzaak1.be/contact": CONTACT})
+    assert enrich.run(con, crawler, log=lambda *_: None)["verrijkt"] == 1
+    assert db.value(con, cid, "algemeen_email") == "hello@testzaak1.be"
+    assert db.value(con, cid, "email_bron") == "https://testzaak1.be/contact"
+
+
+def test_email_in_instagram_bio(con):
+    cid = add_company(con, 6, website="https://www.instagram.com/testzaak6/")
+    social.use_profile(con, cid, {"biography": "Reserveren? info@testzaak6.be of bel ons",
+                                  "website": ""}, "https://www.instagram.com/testzaak6/", lambda *_: None)
+    assert db.value(con, cid, "algemeen_email") == "info@testzaak6.be"
+
+
+def test_website_via_google_lookup(con):
+    cid = add_company(con, 7, website="https://www.instagram.com/testzaak7/")
+
+    class Places:
+        def request(self, method, url, json=None, headers=None, **kw):
+            data = {"places": [{"displayName": {"text": "Andere Zaak"}, "websiteUri": "https://ander.be"},
+                               {"displayName": {"text": "Testzaak 7"}, "websiteUri": "https://testzaak1.be",
+                                "googleMapsUri": "https://maps.google.com/?cid=7"}]}
+            return SimpleNamespace(status_code=200, json=lambda: data, headers={}, content=b"{}", text="")
+    from formathouse.httpclient import LoggedClient
+    crawler, _ = make_crawler(con, {"https://testzaak1.be": HOME, "https://testzaak1.be/contact": CONTACT})
+    st = enrich.run(con, crawler, google_key="K",
+                    google_client=LoggedClient(con, "google_places", min_interval=0, session=Places()),
+                    log=lambda *_: None)
+    assert st["website_via_google"] == 1 and st["verrijkt"] == 1
+    assert db.get_fields(con, cid)["website"]["note"] == "opgezocht via Google Places"
+
+
+def test_email_on_privacy_page(con):
+    cid = add_company(con, 1)
+    home = '<html><a href="/privacy">Privacybeleid</a></html>'
+    crawler, web = make_crawler(con, {"https://testzaak1.be": home,
+                                      "https://testzaak1.be/privacy": "<p>Contact: info@testzaak1.be"
+                                      " — BTW BE 0403.170.701</p>"})
+    enrich.run(con, crawler, log=lambda *_: None)
+    assert db.value(con, cid, "algemeen_email") == "info@testzaak1.be"
+    assert "https://testzaak1.be/contact" in web.requested       # standaardpad geprobeerd

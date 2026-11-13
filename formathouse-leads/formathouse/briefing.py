@@ -121,16 +121,34 @@ GROUPS: dict[str, SectorGroup] = {
         min_reviews=15,
         exclude_name_patterns=_CHAINS,
     ),
+    "immo": SectorGroup(
+        key="immo",
+        label="Immokantoren / vastgoed",
+        quota=50,
+        terms=[
+            "immokantoor", "vastgoedmakelaar", "immobiliënkantoor", "vastgoedkantoor",
+            "vastgoedontwikkelaar", "projectontwikkelaar nieuwbouw",
+        ],
+        min_reviews=15,
+        exclude_name_patterns=_CHAINS,
+    ),
+    "verzekering": SectorGroup(
+        key="verzekering",
+        label="Verzekeringsmakelaars",
+        quota=30,
+        terms=["verzekeringsmakelaar", "verzekeringskantoor", "makelaar in verzekeringen"],
+        min_reviews=10,
+        # bankkantoren zijn geen zelfstandige makelaars
+        exclude_name_patterns=_CHAINS + [" kbc", " belfius", " bnp", " ing ", " argenta",
+                                         " crelan", " beobank", " fintro", " vdk"],
+    ),
     # Alleen mee als ze een duidelijke terugkerende contentbehoefte hebben:
-    # quota 0 = niet standaard meegenomen, alleen met --group overig.
+    # quota 0 = niet standaard meegenomen, alleen op aanvraag.
     "overig": SectorGroup(
         key="overig",
-        label="Overige (vastgoed, automotive, recruitment, events)",
+        label="Overige (automotive, recruitment, events)",
         quota=0,
-        terms=[
-            "vastgoedontwikkelaar", "premium autodealer", "recruitmentbureau",
-            "eventbureau",
-        ],
+        terms=["premium autodealer", "recruitmentbureau", "eventbureau"],
         min_reviews=15,
         exclude_name_patterns=_CHAINS,
     ),

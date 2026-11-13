@@ -28,7 +28,7 @@ def handle_from_url(url: str | None) -> str | None:
 def business_discovery(client: LoggedClient, *, version: str, ig_user_id: str, token: str,
                        handle: str) -> dict | None:
     fields = (f"business_discovery.username({handle})"
-              "{username,followers_count,media_count,"
+              "{username,name,website,biography,followers_count,media_count,"
               "media.limit(50){timestamp,media_product_type,media_type,permalink}}")
     r = client.request(
         "GET", f"{GRAPH}/{version}/{ig_user_id}",
@@ -75,6 +75,31 @@ def analyse_media(bd: dict, today: dt.date | None = None) -> dict:
         "active_30d": bool(last and last >= since),
         "sample": len(stamps),
     }
+
+
+def use_profile(con: sqlite3.Connection, cid: int, bd: dict, src: str, log: Callable) -> None:
+    """Website en algemeen e-mailadres uit het officiële Instagram-bedrijfsprofiel halen.
+    Krijgt het bedrijf zo een (nieuwe) website, dan wordt die bij de volgende
+    verrijkingsronde bezocht om daar het e-mailadres te zoeken."""
+    from .enrich import EMAIL_RE, is_generic_email
+    from .normalize import company_domain
+    note = "uit het Instagram-bedrijfsprofiel (Graph API)"
+    site = (bd.get("website") or "").strip()
+    if site and company_domain(site):
+        db.set_field(con, cid, "ig_website", site, "feit", source_url=src, note=note)
+        if not db.value(con, cid, "website"):
+            db.set_field(con, cid, "website", site, "feit", source_url=src, note=note)
+            con.execute("UPDATE companies SET domain=? WHERE id=?", (company_domain(site), cid))
+            con.execute("DELETE FROM pipeline WHERE company_id=? AND step='enrich'", (cid,))
+            log(f"    website gevonden via Instagram: {site}")
+    if not db.value(con, cid, "algemeen_email"):
+        for e in EMAIL_RE.findall(bd.get("biography") or ""):
+            e = e.strip(".").lower()
+            if is_generic_email(e):
+                db.set_field(con, cid, "algemeen_email", e, "feit", source_url=src, note=note)
+                db.set_field(con, cid, "email_bron", src, "feit", source_url=src, note=note)
+                log(f"    e-mail gevonden in Instagram-bio: {e}")
+                break
 
 
 def ad_library(client: LoggedClient, *, version: str, token: str, name: str,
@@ -135,6 +160,7 @@ def run(con: sqlite3.Connection, client: LoggedClient | None, *, version: str, i
                 a = analyse_media(bd)
                 src = f"https://www.instagram.com/{handle}/"
                 note = "Instagram Graph API (Business Discovery)"
+                use_profile(con, cid, bd, src, log)
                 db.set_field(con, cid, "ig_volgers", a["followers"], "feit", source_url=src, note=note)
                 db.set_field(con, cid, "ig_posts_totaal", a["media_count"], "feit", source_url=src, note=note)
                 db.set_field(con, cid, "reels_30d", a["reels_30d"], "feit", source_url=src,

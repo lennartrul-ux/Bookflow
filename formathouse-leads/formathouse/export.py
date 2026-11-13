@@ -30,6 +30,7 @@ COLUMNS: list[tuple[str, str]] = [
     ("Zichtbare advertenties", "advertenties"),
     ("Groeisignalen", "groeisignalen"),
     ("Algemeen e-mail", "algemeen_email"),
+    ("E-mail gevonden op", "email_bron"),
     ("Algemeen telefoon", "algemeen_telefoon"),
     ("Beslissersfunctie", "beslisser_functie"),
     ("Vermoedelijke contentbehoefte", "contentbehoefte"),

@@ -41,6 +41,8 @@ PAGE_PATTERNS = {
     "contact": re.compile(r"contact|bereik|route|locati|vind-ons|find-us", re.I),
     "over": re.compile(r"over-ons|over_ons|overons|about|ons-verhaal|our-story|wie-zijn", re.I),
     "vacatures": re.compile(r"vacature|jobs?\b|werken-bij|werkenbij|careers?|join|team-wanted", re.I),
+    "juridisch": re.compile(r"privacy|disclaimer|colofon|impressum|juridisch|legal|"
+                            r"algemene-voorwaarden|voorwaarden|cookie", re.I),
 }
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 BE_ENT_RE = re.compile(r"(?:\bBE\s?|\b)([01]\d{3}|\d{3})[.\s]?(\d{3})[.\s]?(\d{3})\b")
@@ -244,10 +246,14 @@ def crawl_site(crawler: Crawler, website: str) -> SiteFindings:
         for kind, rx in PAGE_PATTERNS.items():
             if kind not in f.pages and rx.search(label):
                 f.pages[kind] = href
-    for kind in ("contact", "over", "vacatures"):
+    if "contact" not in f.pages:  # veelgebruikt pad proberen (404 is onschuldig)
+        f.pages["contact"] = urljoin(final_url, "/contact")
+    for kind in ("contact", "over", "vacatures", "juridisch"):
         url = f.pages.get(kind)
         if not url:
             continue
+        if kind == "juridisch" and f.emails and f.enterprise_number:
+            continue  # alleen nodig als e-mail of ondernemingsnummer nog ontbreekt
         try:
             res = crawler.get(url)
         except requests.RequestException as e:
@@ -274,6 +280,8 @@ def store_findings(con: sqlite3.Connection, cid: int, f: SiteFindings) -> None:
         db.set_field(con, cid, "algemeen_email", best, "feit", source_url=f.emails[best], verified_at=ts)
         db.set_field(con, cid, "algemene_emails", ", ".join(sorted(emails)), "feit",
                      source_url=f.emails[best], verified_at=ts)
+        db.set_field(con, cid, "email_bron", f.emails[best], "feit", source_url=f.emails[best],
+                     verified_at=ts)
     else:
         db.set_field(con, cid, "algemeen_email", None, "onbekend", verified_at=ts)
     if f.enterprise_number:
@@ -383,14 +391,50 @@ def apply_kbo(con: sqlite3.Connection, cid: int) -> bool:
     return True
 
 
+# ── Website opzoeken via Google (als die ontbreekt) ───────────────────
+
+def find_website_google(client: LoggedClient, api_key: str, name: str, city: str | None):
+    """Zoek de eigen website van een bedrijf via Google Places. Alleen bij een duidelijke
+    naammatch; geeft (website, google_maps_url) of None."""
+    from .discover import PLACES_URL
+    from .normalize import norm_text
+    body = {"textQuery": f"{name} {city or ''}".strip(), "languageCode": "nl", "pageSize": 3}
+    r = client.request("POST", PLACES_URL, json=body,
+                       headers={"X-Goog-Api-Key": api_key,
+                                "X-Goog-FieldMask": "places.displayName,places.websiteUri,places.googleMapsUri"},
+                       log_params={"doel": "website zoeken", **body},
+                       summarize=lambda r: f"{len(r.json().get('places', []))} kandidaten")
+    if r.status_code >= 400:
+        return None
+    target = norm_text(name)
+    for p in r.json().get("places", []):
+        found = norm_text((p.get("displayName") or {}).get("text"))
+        site = p.get("websiteUri")
+        if site and company_domain(site) and found and (found == target or found in target or target in found):
+            return site, p.get("googleMapsUri") or ""
+    return None
+
+
 # ── Orchestratie ─────────────────────────────────────────────────────
 
 def run(con: sqlite3.Connection, crawler: Crawler, *, limit: int | None = None,
-        redo: bool = False, log: Callable = print) -> dict[str, int]:
-    stats = {"verrijkt": 0, "geen_website": 0, "robots": 0, "fout": 0, "kbo": 0}
+        redo: bool = False, google_key: str = "", google_client: LoggedClient | None = None,
+        log: Callable = print) -> dict[str, int]:
+    stats = {"verrijkt": 0, "geen_website": 0, "robots": 0, "fout": 0, "kbo": 0,
+             "website_via_google": 0}
     has_kbo = con.execute("SELECT 1 FROM kbo_enterprise LIMIT 1").fetchone() is not None
     for c in db.pending(con, "enrich", redo=redo, limit=limit):
         website = db.value(con, c["id"], "website")
+        if not website and google_key and google_client is not None:
+            hit = find_website_google(google_client, google_key, c["name"], c["city"])
+            if hit:
+                website, maps_url = hit
+                db.set_field(con, c["id"], "website", website, "feit",
+                             source_url=maps_url or website, note="opgezocht via Google Places")
+                con.execute("UPDATE companies SET domain=? WHERE id=?",
+                            (company_domain(website), c["id"]))
+                stats["website_via_google"] += 1
+                log(f"  🔎 {c['name']}: website gevonden via Google — {website}")
         if not website:
             db.mark_step(con, c["id"], "enrich", "overgeslagen", "geen eigen website")
             stats["geen_website"] += 1

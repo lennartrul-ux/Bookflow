@@ -126,7 +126,10 @@ def enrich_run(limit: Optional[int] = typer.Option(None, "--limit", "-n"),
                redo: bool = typer.Option(False, "--redo", help="Ook reeds verrijkte bedrijven.")):
     """Bezoek de bedrijfswebsites (robots.txt, rustig tempo) en vul KBO-gegevens aan."""
     s, con = _con()
-    stats = enrich_mod.run(con, _crawler(s, con), limit=limit, redo=redo, log=typer.echo)
+    stats = enrich_mod.run(con, _crawler(s, con), limit=limit, redo=redo,
+                           google_key=s.google_places_api_key,
+                           google_client=LoggedClient(con, "google_places", min_interval=0.3),
+                           log=typer.echo)
     typer.echo(f"\n{stats}")
 
 
@@ -324,6 +327,7 @@ def pipeline(limit: Optional[int] = typer.Option(None, "--limit", "-n")):
     """Verrijk, analyseer socials en scoor alles wat nog niet verwerkt is."""
     enrich_run(limit=limit, redo=False)
     social_run(limit=limit, redo=False)
+    enrich_run(limit=limit, redo=False)  # websites die via Instagram gevonden werden
     score_run(limit=limit, redo=False)
 
 

@@ -100,9 +100,12 @@ def job_pipeline(limit: int | None):
     _log("Stap 2 — websites bezoeken (rustig tempo, kan even duren)…")
     crawler = enrich.Crawler(LoggedClient(con, "website", min_interval=0), s.crawl_user_agent,
                              s.crawl_delay)
-    _log(f"  {enrich.run(con, crawler, limit=limit, log=_log)}")
+    gclient = LoggedClient(con, "google_places", min_interval=0.3)
+    _log(f"  {enrich.run(con, crawler, limit=limit, google_key=s.google_places_api_key, google_client=gclient, log=_log)}")
     _log("Stap 3 — Instagram en advertenties…")
     _log(f"  {social.run(con, LoggedClient(con, 'meta_graph', min_interval=1.0), version=s.meta_graph_version, ig_user_id=s.meta_ig_user_id, token=s.meta_access_token, limit=limit, log=_log)}")
+    _log("Stap 3b — websites die via Instagram gevonden werden bezoeken…")
+    _log(f"  {enrich.run(con, crawler, limit=limit, google_key=s.google_places_api_key, google_client=gclient, log=_log)}")
     _log("Stap 4 — scoren…")
     _log(f"  {score.run(con, api_key=s.anthropic_api_key, model=s.claude_model, limit=limit, log=_log)}")
 

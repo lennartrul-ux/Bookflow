@@ -13,6 +13,8 @@ SECTOR_HOOK = {
     "horeca": "jullie sfeer, gerechten en team",
     "fitness": "jullie coaches, lessen en community",
     "lifestyle": "jullie collecties en lanceringen",
+    "immo": "jullie panden, de buurt en het team",
+    "verzekering": "jullie advies en het team achter het kantoor",
 }
 
 EMAIL_SCHEMA = {

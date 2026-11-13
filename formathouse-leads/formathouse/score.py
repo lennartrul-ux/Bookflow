@@ -23,6 +23,8 @@ CRITERIA = {  # sleutel: (maximum, omschrijving)
 BUDGETS = ["< €1.500/maand", "€1.500–€2.500/maand", "€2.500–€5.000/maand",
            "> €5.000/maand", "onbekend"]
 PRIORITY_GROUPS = {"horeca", "fitness", "lifestyle"}
+# Basispunten 'maandelijks potentieel' per sector (vastgoed: elk pand is nieuwe content).
+POTENTIAL_BASE = {"horeca": 10, "fitness": 10, "lifestyle": 10, "immo": 10, "verzekering": 6}
 
 BRIEFING = """\
 The Format House is een Belgisch creatief content agency voor professionele short-form video
@@ -35,7 +37,8 @@ bereikbare marketingverantwoordelijke of beslisser.
 
 Absolute prioriteit: horecagroepen, trendy restaurants, premium hospitality, boutique hotels,
 fitnessclubs, premium gyms, pilatesstudio's, wellness, beauty en esthetische centra, lifestyle- en
-fashionbrands, e-commerce, consumer brands. Daarnaast: vastgoed, premium automotive, recruitment,
+fashionbrands, e-commerce, consumer brands. Daarnaast: immokantoren en vastgoed (elk pand is nieuwe
+content), verzekeringsmakelaars, premium automotive, recruitment,
 events/festivals/entertainment en groeiende B2B-bedrijven met terugkerende contentbehoefte.
 
 Extra punten voor: regelmatige lanceringen (producten, vestigingen, events, campagnes), actief
@@ -195,11 +198,12 @@ def score_with_rules(payload: dict) -> dict:
         need += 8; nwhy.append("Instagram-activiteit onbekend: neutraal (+8)")
     if known("instagram"):
         need += 4; nwhy.append("Instagram-profiel aanwezig (+4)")
-    if group in PRIORITY_GROUPS:
-        need += 4; nwhy.append("prioritaire sector (+4)")
+    if group in PRIORITY_GROUPS or group == "immo":
+        need += 4; nwhy.append("sector met terugkerende contentbehoefte (+4)")
 
     # Maandelijks potentieel (20)
-    pot, pwhy = (10, ["prioritaire sector (+10)"]) if group in PRIORITY_GROUPS else (5, ["overige sector (+5)"])
+    base = POTENTIAL_BASE.get(group, 5)
+    pot, pwhy = base, [f"sector {group} (+{base})"]
     if known("recente_lanceringen"):
         pot += 5; pwhy.append("terugkerende lanceringen/events (+5)")
     if (_num(val("vestigingen")) or 0) >= 2:
@@ -238,7 +242,7 @@ def score_with_rules(payload: dict) -> dict:
     budget = "onbekend"
     if price.count("€") >= 3 or (_num(val("vestigingen")) or 0) >= 3:
         budget = "€2.500–€5.000/maand"
-    elif group in PRIORITY_GROUPS and known("instagram"):
+    elif group in POTENTIAL_BASE and known("instagram"):
         budget = "€1.500–€2.500/maand"
 
     signals = [x for x in (val("koopsignaal"), val("groeisignalen")) if x]
@@ -246,6 +250,8 @@ def score_with_rules(payload: dict) -> dict:
         "horeca": "Laat de sfeer, gerechten en het team zien in korte Reels die reservaties opleveren",
         "fitness": "Toon resultaten, coaches en de community in herkenbare short-form reeksen die leden aantrekken",
         "lifestyle": "Breng collecties en lanceringen tot leven met een vaste stroom productvideo's en Reels",
+        "immo": "Laat elk pand, de buurt en het team zien in korte video's die sneller kopers en huurders aantrekken",
+        "verzekering": "Maak advies tastbaar met korte, herkenbare uitlegvideo's en geef het kantoor een gezicht",
     }.get(group, "Bouw een vaste stroom short-form video rond jullie aanbod")
     insteek = angle + (f". Aanknopingspunt: {signals[0]}." if signals else ".")
 
@@ -265,6 +271,8 @@ def score_with_rules(payload: dict) -> dict:
             "horeca": "Wekelijkse Reels: gerechten, sfeer, team, events",
             "fitness": "Reeksen met coaches, transformaties, lessen en community",
             "lifestyle": "Productvideo's, lanceringen en behind-the-scenes",
+            "immo": "Pandvideo's en -tours, buurtvideo's, team en 'te koop/verkocht'-Reels",
+            "verzekering": "Korte uitlegvideo's, klantverhalen en team",
         }.get(group, "Terugkerende short-form video rond aanbod en team"),
         "beslisser_functie": "zaakvoerder of marketingverantwoordelijke",
         "salesinsteek": insteek,

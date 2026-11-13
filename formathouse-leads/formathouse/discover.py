@@ -58,8 +58,15 @@ OSM_FILTERS: dict[str, list[str]] = {
         '["shop"~"^(clothes|boutique|fashion|shoes|jewelry|interior_decoration|'
         'cosmetics|perfumery|bag|fashion_accessories|houseware)$"]',
     ],
+    "immo": [
+        '["office"~"^(estate_agent|property_management)$"]',
+        '["shop"="estate_agent"]',
+    ],
+    "verzekering": [
+        '["office"="insurance"]',
+    ],
     "overig": [
-        '["office"~"^(estate_agent|employment_agency|event_management)$"]',
+        '["office"~"^(employment_agency|event_management)$"]',
         '["shop"="car"]',
     ],
 }
@@ -72,7 +79,8 @@ OSM_LABELS = {
     "boutique": "Boetiek", "shoes": "Schoenenwinkel", "jewelry": "Juwelier",
     "interior_decoration": "Interieurwinkel", "cosmetics": "Cosmeticawinkel",
     "perfumery": "Parfumerie", "estate_agent": "Vastgoedkantoor",
-    "employment_agency": "Uitzend-/recruitmentbureau", "car": "Autodealer",
+    "employment_agency": "Uitzend-/recruitmentbureau", "insurance": "Verzekeringskantoor",
+    "property_management": "Vastgoedbeheer", "car": "Autodealer",
     "event_management": "Eventbureau",
 }
 
