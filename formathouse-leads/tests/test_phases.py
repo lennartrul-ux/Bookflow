@@ -491,11 +491,18 @@ def test_all_groups_have_osm_filters_and_copy():
 
 def test_no_socials_excluded_after_crawl(con):
     cid = add_company(con, 1)
-    crawler, _ = make_crawler(con, {"https://testzaak1.be": "<html><p>Welkom</p></html>"})
-    enrich.run(con, crawler, log=lambda *_: None)
+    crawler, _ = make_crawler(con, {"https://testzaak1.be": '<html><p>Welkom</p><a href="http://[x y]/">kapot</a></html>'})
+    enrich.run(con, crawler, log=lambda *_: None)            # kapotte link crasht niet
     score.run(con, log=lambda *_: None)
     row = con.execute("SELECT priority, rank FROM scores WHERE company_id=?", (cid,)).fetchone()
     assert row[0] == "uitgesloten" and row[1] is None
+    # wel een e-mailadres maar geen socials → niet uitgesloten
+    cid3 = add_company(con, 3)
+    crawler, _ = make_crawler(con, {"https://testzaak3.be": "<p>mail ons: info@testzaak3.be</p>"})
+    enrich.run(con, crawler, log=lambda *_: None)
+    assert db.value(con, cid3, "algemeen_email") == "info@testzaak3.be"
+    score.run(con, log=lambda *_: None)
+    assert con.execute("SELECT priority FROM scores WHERE company_id=?", (cid3,)).fetchone()[0] != "uitgesloten"
     # niet bezocht (geen enrich) → niet uitgesloten om die reden
     cid2 = add_company(con, 2)
     score.run(con, log=lambda *_: None)

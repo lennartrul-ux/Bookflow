@@ -57,3 +57,24 @@ def test_online_login_and_cron(client, monkeypatch):
     assert client.post("/api/cron/tick", base_url=url).status_code == 403
     r = client.post("/api/cron/tick", headers={"X-Cron-Token": "tok"}, base_url=url)
     assert r.get_json()["ok"]
+
+
+def test_all_leads_view(client):
+    from formathouse import db, discover
+    from formathouse.briefing import CITIES, GROUPS
+    from formathouse.config import Settings
+    con = db.connect(Settings.load().db_path)
+    mk = lambda i, **kw: discover.ingest(con, discover.Candidate(  # noqa: E731
+        source="google", source_id=f"v{i}", source_url="x", name=f"Zaak {i}", postal_code="2000",
+        country="BE", website=f"https://zaak{i}.be", reviews=kw.get("reviews", 500)),
+        GROUPS["horeca"], "t", CITIES[0])[0]
+    a, b = mk(1), mk(2)
+    mk(3, reviews=5)                                            # afgewezen
+    db.set_field(con, a, "algemeen_email", "info@zaak1.be", "feit", source_url="x")
+    con.commit()
+    d = client.get("/api/leads?filter=alle", base_url=LOCAL).get_json()
+    assert d["counts"]["alle"] == 2 and d["counts"]["afgewezen"] == 1 and d["counts"]["email"] == 1
+    d = client.get("/api/leads?filter=afgewezen", base_url=LOCAL).get_json()
+    assert d["rows"][0]["reason"].startswith("minder dan")
+    d = client.get("/api/leads?filter=alle&q=zaak 2", base_url=LOCAL).get_json()
+    assert [r["name"] for r in d["rows"]] == ["Zaak 2"]

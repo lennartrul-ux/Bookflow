@@ -382,9 +382,10 @@ def run(con: sqlite3.Connection, *, api_key: str = "", model: str = "claude-opus
             stats["fout"] += 1
             log(f"  ✗ {c['name']}: {e!r}")
             continue
-        if _no_socials(con, c["id"]) and not data.get("uitsluiten"):
+        if _no_socials(con, c["id"]) and not db.value(con, c["id"], "algemeen_email") \
+                and not data.get("uitsluiten"):
             data["uitsluiten"] = True
-            data["uitsluitreden"] = "geen social-media-aanwezigheid gevonden op de website"
+            data["uitsluitreden"] = "geen social media en geen algemeen e-mailadres gevonden"
             data["prioriteit"] = "uitgesloten"
         store(con, c["id"], data, method)
         db.mark_step(con, c["id"], "score", "ok", method)

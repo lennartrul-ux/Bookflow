@@ -239,9 +239,12 @@ def crawl_site(crawler: Crawler, website: str) -> SiteFindings:
 
     host = urlparse(final_url).netloc
     for a in soup.find_all("a", href=True):
-        href = urljoin(final_url, a["href"]).split("#")[0]
-        if urlparse(href).netloc != host:
-            continue
+        try:
+            href = urljoin(final_url, a["href"]).split("#")[0]
+            if urlparse(href).netloc != host:
+                continue
+        except ValueError:
+            continue  # kapotte link op de site (bv. 'http://[iets]'): overslaan
         label = f"{href} {a.get_text(' ', strip=True)}"
         for kind, rx in PAGE_PATTERNS.items():
             if kind not in f.pages and rx.search(label):

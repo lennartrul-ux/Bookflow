@@ -349,6 +349,78 @@ def _busy():
     return jsonify({"ok": False, "message": f"Er loopt al een taak: {JOB['name']}"}), 409
 
 
+LEAD_FILTERS = {
+    "alle": "Alle actieve leads",
+    "email": "Met e-mail",
+    "instagram": "Met Instagram (zonder e-mail)",
+    "geen_contact": "Zonder e-mail en zonder Instagram",
+    "nieuw": "Nog niet verwerkt",
+    "uitgesloten": "Uitgesloten na verwerking",
+    "afgewezen": "Afgewezen door de voorfilter",
+    "verwijderd": "Zelf verwijderd",
+}
+
+
+@app.get("/api/leads")
+def api_leads():
+    """Volledige lijst met filters, ook leads zonder e-mail of Instagram."""
+    _s, con = _ctx()
+    flt = request.args.get("filter", "alle")
+    sector = request.args.get("sector", "")
+    q = (request.args.get("q") or "").strip().lower()
+    f = lambda key: f"(SELECT value FROM fields WHERE company_id=c.id AND field='{key}')"  # noqa: E731
+    rows = con.execute(f"""
+        SELECT c.id, c.name, c.city, c.sector_group, c.excluded, c.exclude_reason,
+               s.total, s.priority, s.rank, s.top50,
+               (SELECT status FROM pipeline WHERE company_id=c.id AND step='enrich') AS enrich,
+               {f('website')} AS website, {f('algemeen_email')} AS email,
+               {f('instagram')} AS instagram, {f('algemeen_telefoon')} AS phone,
+               {f('google_reviews')} AS reviews, {f('google_rating')} AS rating,
+               {f('google_categorie')} AS gcat, {f('categorie')} AS cat
+        FROM companies c LEFT JOIN scores s ON s.company_id=c.id
+        ORDER BY s.rank IS NULL, s.rank, c.id DESC""").fetchall()
+    counts = {k: 0 for k in LEAD_FILTERS}
+    out = []
+    for r in rows:
+        removed = r["exclude_reason"] == manage.REMOVED
+        if removed:
+            kinds = {"verwijderd"}
+        elif r["excluded"]:
+            kinds = {"afgewezen"}
+        else:
+            kinds = {"alle"}
+            if r["priority"] == "uitgesloten":
+                kinds.add("uitgesloten")
+            if not r["enrich"]:
+                kinds.add("nieuw")
+            if r["email"]:
+                kinds.add("email")
+            elif r["instagram"]:
+                kinds.add("instagram")
+            elif r["enrich"]:
+                kinds.add("geen_contact")
+        if sector and r["sector_group"] != sector:
+            continue
+        if q and q not in f"{r['name']} {r['city'] or ''}".lower():
+            continue
+        for k in kinds:
+            counts[k] += 1
+        if flt not in kinds:
+            continue
+        reason = r["exclude_reason"] if r["excluded"] else ""
+        if not reason and r["priority"] == "uitgesloten" and r["total"] is not None:
+            reason = (con.execute("SELECT note FROM fields WHERE company_id=? AND field='prioriteit'",
+                                  (r["id"],)).fetchone() or [""])[0]
+        out.append({"id": r["id"], "name": r["name"], "city": r["city"],
+                    "sector": GROUPS.get(r["sector_group"]).label if r["sector_group"] in GROUPS else "",
+                    "website": r["website"], "email": r["email"], "instagram": r["instagram"],
+                    "phone": r["phone"], "reviews": r["reviews"], "rating": r["rating"],
+                    "category": r["gcat"] or r["cat"], "score": r["total"], "priority": r["priority"],
+                    "rank": r["rank"], "top50": bool(r["top50"]), "processed": bool(r["enrich"]),
+                    "reason": reason, "removed": removed, "excluded": bool(r["excluded"])})
+    return jsonify({"filters": LEAD_FILTERS, "counts": counts, "rows": out[:1000], "total": len(out)})
+
+
 @app.post("/api/leads/remove")
 def api_remove():
     _s, con = _ctx()
@@ -616,6 +688,16 @@ section{display:none}section.on{display:block}
  <p class="hint">Gerangschikt op score, maandelijks potentieel en contentbehoefte. ★ = top 50.</p>
  <div class="tbl"><table><thead><tr><th>#</th><th>Score</th><th>Bedrijf</th><th>Contact</th><th>Salesinsteek</th><th></th></tr></thead>
  <tbody id="top"></tbody></table></div></div>
+ <div class="card"><h2>Alle leads</h2>
+  <p class="hint">Ook leads zonder e-mail of Instagram, nog niet verwerkte en uitgesloten leads, met de reden.</p>
+  <div class="row" style="margin-bottom:10px">
+   <label>Toon<select id="al-filter" onchange="loadAll()"></select></label>
+   <label>Sector<select id="al-sector" onchange="loadAll()"><option value="">alle sectoren</option></select></label>
+   <label style="flex:1;min-width:160px">Zoeken<input id="al-q" placeholder="naam of stad" oninput="clearTimeout(window._alt);window._alt=setTimeout(loadAll,300)"></label>
+  </div>
+  <p class="hint" id="al-total"></p>
+  <div class="tbl"><table><thead><tr><th>Bedrijf</th><th>Website</th><th>E-mail</th><th>Instagram</th><th>Telefoon</th><th>Google</th><th>Score</th><th>Status</th><th></th></tr></thead>
+  <tbody id="al-rows"></tbody></table></div></div>
  <div class="card" id="removedcard" style="display:none"><h2>Verwijderde leads</h2>
   <p class="hint">Deze komen niet terug bij nieuwe zoekopdrachten. Vergist? Zet ze terug.</p><div id="removed"></div></div></section>
 
@@ -662,7 +744,27 @@ function toast(m){const t=$("toast");t.textContent=m;t.classList.add("on");setTi
 async function post(url,body){const r=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json","X-FH":"1"},body:JSON.stringify(body)});
  const j=await r.json().catch(()=>({}));if(j.message)toast(j.message);await load();return j}
 async function run(url,body){const j=await post(url,body);if(j.ok)toast("Gestart — volg de voortgang bovenaan")}
-function setTab(t){tab=t;localStorage.setItem("fh-tab",t);render()}
+function setTab(t){tab=t;localStorage.setItem("fh-tab",t);render();if(t=="leads")loadAll()}
+async function loadAll(){
+ const p=new URLSearchParams({filter:$("al-filter").value||"alle",sector:$("al-sector").value,q:$("al-q").value});
+ const r=await fetch("/api/leads?"+p);if(!r.ok)return;const d=await r.json();
+ const cur=$("al-filter").value||"alle";
+ $("al-filter").innerHTML=Object.entries(d.filters).map(([k,l])=>`<option value="${k}" ${k==cur?"selected":""}>${esc(l)} (${d.counts[k]})</option>`).join("");
+ $("al-total").textContent=d.total>d.rows.length?`${d.total} leads, de eerste ${d.rows.length} worden getoond.`:`${d.total} lead(s).`;
+ const link=(u,t)=>u?`<a href="${esc(u)}" target="_blank">${esc(t)}</a>`:'<span class="muted">—</span>';
+ $("al-rows").innerHTML=d.rows.length?d.rows.map(r=>{
+  const st=r.removed?"verwijderd":r.excluded?"afgewezen":!r.processed?"nog niet verwerkt":r.priority||"verwerkt";
+  const ig=r.instagram?link(r.instagram,"@"+(r.instagram.split("instagram.com/")[1]||"").replace(/\/$/,"")):'<span class="muted">—</span>';
+  const act=r.removed?`<button class="btn sec" onclick="post('/api/leads/restore',{id:${r.id}}).then(loadAll)">Terugzetten</button>`
+   :r.excluded?"":`<button class="btn sec" title="Verwijderen" onclick="if(confirm('Verwijderen?'))post('/api/leads/remove',{id:${r.id}}).then(loadAll)">✕</button>`;
+  return `<tr><td><b>${esc(r.name)}</b><br><span class="muted">${esc(r.city||"")} · ${esc(r.sector)}${r.category?" · "+esc(r.category):""}</span></td>
+   <td>${link(r.website,"website")}</td><td>${r.email?esc(r.email):'<span class="muted">—</span>'}</td><td>${ig}</td>
+   <td>${r.phone?esc(r.phone):'<span class="muted">—</span>'}</td>
+   <td>${r.reviews?`${esc(r.rating||"")}★ · ${esc(r.reviews)}`:'<span class="muted">—</span>'}</td>
+   <td>${r.score??'<span class="muted">—</span>'}${r.top50?" ★":""}</td>
+   <td><span class="pill ${esc(r.priority||"")}">${esc(st)}</span>${r.reason?`<br><span class="muted" style="font-size:12px">${esc(r.reason)}</span>`:""}</td><td>${act}</td></tr>`}).join("")
+  :'<tr><td colspan="9" class="muted">Geen leads voor deze filter.</td></tr>';
+}
 function render(){
  $("nav").innerHTML=TABS.map(([k,l])=>`<button class="${k==tab?"on":""}" onclick="setTab('${k}')">${l}</button>`).join("");
  document.querySelectorAll("section").forEach(s=>s.classList.toggle("on",s.id=="s-"+tab));
@@ -711,7 +813,8 @@ async function saveSettings(){const b={};document.querySelectorAll("#settings in
  await post("/api/settings",b);renderSettings()}
 async function load(){const r=await fetch("/api/state");if(r.status==401){location.href="/login";return}S=await r.json();
  if(!$("d-group").dataset.f){$("d-group").innerHTML+=GROUPS.map(g=>`<option value="${g.key}">${esc(g.label)}</option>`).join("");
-  $("d-city").innerHTML+=S.cities.map(c=>`<option>${esc(c)}</option>`).join("");$("d-group").dataset.f=1;renderSettings()}
+  $("d-city").innerHTML+=S.cities.map(c=>`<option>${esc(c)}</option>`).join("");$("d-group").dataset.f=1;renderSettings()
+  $("al-sector").innerHTML+=GROUPS.map(g=>`<option value="${g.key}">${esc(g.label)}</option>`).join("");if(tab=="leads")loadAll()}
  if(wasRunning&&!S.job.running)toast(S.job.error?"Taak gestopt met een fout — zie het logboek":"Klaar!");wasRunning=S.job.running;render()}
 load();setInterval(load,2000);
 </script></body></html>"""
