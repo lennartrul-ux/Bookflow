@@ -186,6 +186,15 @@ def healthz():
     return "ok"
 
 
+@app.post("/api/shutdown")
+def api_shutdown():
+    """Lokaal: laat een nieuwere versie de oude, nog draaiende app afsluiten."""
+    if _password() or (request.remote_addr not in ("127.0.0.1", "::1")):
+        abort(403)
+    threading.Timer(0.3, lambda: os._exit(0)).start()
+    return jsonify({"ok": True})
+
+
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if not _password():
@@ -718,12 +727,30 @@ def main(open_browser: bool | None = None) -> None:
     import flask.cli
     logging.getLogger("werkzeug").setLevel(logging.ERROR)
     flask.cli.show_server_banner = lambda *a, **k: None
-    try:
-        app.run(host="127.0.0.1", port=PORT, debug=False, use_reloader=False, threaded=True)
-    except OSError:
-        # draait al (bv. tweede dubbelklik): open gewoon de bestaande app
-        print("  De app draait al — ik open hem in je browser.")
-        webbrowser.open(url)
+    def port_in_use() -> bool:
+        import socket
+        with socket.socket() as sock:
+            return sock.connect_ex(("127.0.0.1", PORT)) == 0
+
+    if port_in_use():
+        # er draait al een (mogelijk oudere) versie: vraag die af te sluiten en neem over
+        print("  Er draait nog een oudere app — die wordt afgesloten…")
+        try:
+            import requests
+            requests.post(url + "api/shutdown", headers={"X-FH": "1"}, timeout=3,
+                          proxies={"http": None, "https": None})
+        except Exception:
+            pass
+        for _ in range(20):
+            if not port_in_use():
+                break
+            time.sleep(0.25)
+        else:
+            print("  De app draait al in een ander venster — ik open die in je browser.")
+            if open_browser:
+                webbrowser.open(url)
+            return
+    app.run(host="127.0.0.1", port=PORT, debug=False, use_reloader=False, threaded=True)
 
 
 if __name__ == "__main__":
