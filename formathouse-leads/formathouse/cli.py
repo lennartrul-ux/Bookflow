@@ -22,7 +22,8 @@ outreach_app = typer.Typer(help="Fase 5 — e-mail outreach (dry-run tot jouw --
                            no_args_is_help=True)
 ig_app = typer.Typer(help="Fase 5 — Instagram-wachtrij (de tool verstuurt zelf niets).",
                      no_args_is_help=True)
-for sub, name in ((discover_app, "discover"), (enrich_app, "enrich"), (social_app, "social"),
+leads_app = typer.Typer(help="Leads beheren: verwijderen en terugzetten.", no_args_is_help=True)
+for sub, name in ((leads_app, "leads"), (discover_app, "discover"), (enrich_app, "enrich"), (social_app, "social"),
                   (score_app, "score"), (outreach_app, "outreach"), (ig_app, "ig_queue")):
     app.add_typer(sub, name=name)
 
@@ -318,6 +319,37 @@ def ig_sync():
     n = igq.sync(con, s.output_dir, log=typer.echo)
     igq.write_files(con, s.output_dir, limit=s.ig_daily_max)
     typer.echo(f"{n} status(sen) bijgewerkt.")
+
+
+# ── Beheer ───────────────────────────────────────────────────────────
+
+@leads_app.command("remove")
+def leads_remove(lead_id: int):
+    """Verwijder een lead (komt niet terug bij nieuwe zoekopdrachten)."""
+    from . import manage
+    _s, con = _con()
+    typer.echo(f"Verwijderd: {manage.remove_lead(con, lead_id)}")
+
+
+@leads_app.command("restore")
+def leads_restore(lead_id: int):
+    """Zet een verwijderde lead terug."""
+    from . import manage
+    _s, con = _con()
+    typer.echo(f"Teruggezet: {manage.restore_lead(con, lead_id)}")
+
+
+@app.command()
+def reset(ja: bool = typer.Option(False, "--ja", help="Bevestig: alles wissen.")):
+    """Opnieuw beginnen: wis alle leads (instellingen en contacthistoriek blijven)."""
+    from . import manage
+    from .config import DATA_DIR
+    if not ja:
+        typer.echo("Voeg --ja toe om alle leads te wissen.")
+        raise typer.Exit(1)
+    s, con = _con()
+    saved = manage.backup(s.db_path, DATA_DIR / "backups")
+    typer.echo(f"{manage.reset_all(con)}" + (f"\nReservekopie: {saved}" if saved else ""))
 
 
 # ── Fase 6 en hulpmiddelen ───────────────────────────────────────────

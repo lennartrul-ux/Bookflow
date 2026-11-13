@@ -20,7 +20,7 @@ import secrets
 from flask import Flask, Response, abort, jsonify, redirect, request, send_file, session
 
 from . import db, discover, enrich, export as export_mod, ig_queue as igq
-from . import outreach, score, social
+from . import manage, outreach, score, social
 from .briefing import CITIES, GROUPS, REGIONS
 from . import config as _config, updater as _updater
 from .config import Settings, hosted, save_settings
@@ -285,7 +285,7 @@ def state():
                             FROM scores s JOIN companies c ON c.id=s.company_id
                             WHERE s.rank IS NOT NULL ORDER BY s.rank LIMIT 100"""):
         v = lambda f: db.value(con, r["id"], f)  # noqa: E731
-        top.append({"rank": r["rank"], "score": r["total"], "priority": r["priority"],
+        top.append({"id": r["id"], "rank": r["rank"], "score": r["total"], "priority": r["priority"],
                     "top50": bool(r["top50"]), "name": r["name"], "city": r["city"],
                     "website": v("website"), "instagram": v("instagram"),
                     "email": v("algemeen_email"), "insteek": v("salesinsteek"),
@@ -307,6 +307,8 @@ def state():
         "settings": settings, "region": s.region, "groups": groups, "rejected": rejected,
         "active": active, "steps": steps, "top": top, "batches": batches, "ig": ig,
         "ig_counts": ig_counts,
+        "removed": [{"id": r["id"], "name": r["name"], "city": r["city"]}
+                    for r in manage.removed_leads(con)],
         "can_send": s.can_send, "hosted": hosted(), "login": bool(_password()),
         "version": (_updater.installed_version() or "")[:7],
         "data_dir": "" if hosted() else str(_config.DATA_DIR),
@@ -331,6 +333,43 @@ def _int(v, default=None):
 
 def _busy():
     return jsonify({"ok": False, "message": f"Er loopt al een taak: {JOB['name']}"}), 409
+
+
+@app.post("/api/leads/remove")
+def api_remove():
+    _s, con = _ctx()
+    try:
+        name = manage.remove_lead(con, _int(_body().get("id"), -1))
+    except KeyError as e:
+        return jsonify({"ok": False, "message": str(e)}), 404
+    return jsonify({"ok": True, "message": f"{name} verwijderd. Komt niet terug bij nieuwe zoekopdrachten."})
+
+
+@app.post("/api/leads/restore")
+def api_restore():
+    _s, con = _ctx()
+    try:
+        name = manage.restore_lead(con, _int(_body().get("id"), -1))
+    except KeyError as e:
+        return jsonify({"ok": False, "message": str(e)}), 404
+    return jsonify({"ok": True, "message": f"{name} teruggezet. Draai eventueel 'Verwerken' opnieuw."})
+
+
+@app.post("/api/reset")
+def api_reset():
+    if (_body().get("confirm") or "").strip().upper() != "WISSEN":
+        return jsonify({"ok": False, "message": "Typ WISSEN om te bevestigen."}), 400
+    if JOB["running"]:
+        return _busy()
+    s, con = _ctx()
+    saved = None if hosted() else manage.backup(s.db_path, _config.DATA_DIR / "backups")
+    counts = manage.reset_all(con)
+    JOB["log"].clear()
+    JOB.update(name=None, error=None)
+    msg = f"Alles gewist ({counts.get('companies', 0)} leads)."
+    if saved:
+        msg += f" Reservekopie: {saved.name} (map backups)."
+    return jsonify({"ok": True, "message": msg})
 
 
 @app.post("/api/update")
@@ -561,8 +600,10 @@ section{display:none}section.on{display:block}
 
 <section id="s-leads"><div class="card"><h2>Beste leads</h2>
  <p class="hint">Gerangschikt op score, maandelijks potentieel en contentbehoefte. ★ = top 50.</p>
- <div class="tbl"><table><thead><tr><th>#</th><th>Score</th><th>Bedrijf</th><th>Contact</th><th>Salesinsteek</th></tr></thead>
- <tbody id="top"></tbody></table></div></div></section>
+ <div class="tbl"><table><thead><tr><th>#</th><th>Score</th><th>Bedrijf</th><th>Contact</th><th>Salesinsteek</th><th></th></tr></thead>
+ <tbody id="top"></tbody></table></div></div>
+ <div class="card" id="removedcard" style="display:none"><h2>Verwijderde leads</h2>
+  <p class="hint">Deze komen niet terug bij nieuwe zoekopdrachten. Vergist? Zet ze terug.</p><div id="removed"></div></div></section>
 
 <section id="s-mail">
  <div class="card"><h2>Nieuwe batch concept-mails</h2>
@@ -592,7 +633,11 @@ section{display:none}section.on{display:block}
  <p class="hint" id="datadir"></p>
  <p class="hint">Alles is optioneel. Zonder sleutel gebruikt de app gratis alternatieven of laat ze het veld op 'onbekend'. Sleutels worden nooit opnieuw getoond. Lokaal staan ze in het bestand .env op je computer; in de online versie in je eigen database.</p>
  <div class="grid2" id="settings"></div>
- <div class="row" style="margin-top:14px"><button class="btn" onclick="saveSettings()">Bewaren</button></div></div></section>
+ <div class="row" style="margin-top:14px"><button class="btn" onclick="saveSettings()">Bewaren</button></div></div>
+ <div class="card"><h2>Opnieuw beginnen</h2>
+  <p class="hint">Wist alle leads, scores, concept-mails en de Instagram-wachtrij. Je instellingen blijven staan. Wie al een mail of DM kreeg of zich uitschreef, wordt ook daarna nooit opnieuw benaderd. Lokaal wordt eerst een reservekopie gemaakt; download voor de zekerheid ook de Excel.</p>
+  <div class="row"><a class="btn sec" href="/download/leads.xlsx">Download Excel</a>
+  <button class="btn sec" style="color:var(--bad)" onclick="resetAll()">Alles wissen…</button></div></div></section>
 </main>
 <div class="toast" id="toast"></div>
 <script>
@@ -619,8 +664,11 @@ function render(){
  document.querySelectorAll("button[data-job]").forEach(b=>b.disabled=j.running);
  $("top").innerHTML=S.top.length?S.top.map(r=>`<tr><td>${r.top50?"★ ":""}${r.rank}</td><td><b>${r.score}</b><br><span class="pill ${r.priority}">${r.priority}</span></td>
   <td><b>${esc(r.name)}</b><br><span class="muted">${esc(r.city||"")}</span>${r.website?`<br><a href="${esc(r.website)}" target="_blank">website</a>`:""}</td>
-  <td>${r.email?esc(r.email)+"<br>":""}${r.instagram?`<a href="${esc(r.instagram)}" target="_blank">Instagram</a>`:""}</td><td>${esc(r.insteek||"")}</td></tr>`).join("")
-  :`<tr><td colspan="5" class="muted">Nog geen gescoorde leads. Ga naar Start → zoeken en verwerken.</td></tr>`;
+  <td>${r.email?esc(r.email)+"<br>":""}${r.instagram?`<a href="${esc(r.instagram)}" target="_blank">Instagram</a>`:""}</td><td>${esc(r.insteek||"")}</td>
+  <td><button class="btn sec" title="Lead verwijderen" onclick="if(confirm('${esc(r.name).replace(/'/g,"")} verwijderen?'))post('/api/leads/remove',{id:${r.id}})">✕</button></td></tr>`).join("")
+  :`<tr><td colspan="6" class="muted">Nog geen gescoorde leads. Ga naar Start → zoeken en verwerken.</td></tr>`;
+ $("removedcard").style.display=S.removed.length?"":"none";
+ $("removed").innerHTML=S.removed.map(r=>`<div class="row" style="justify-content:space-between;border-bottom:1px solid var(--line);padding:6px 0"><span>${esc(r.name)} <span class="muted">${esc(r.city||"")}</span></span><button class="btn sec" onclick="post('/api/leads/restore',{id:${r.id}})">Terugzetten</button></div>`).join("");
  $("sendhint").innerHTML=S.can_send?"Goedkeuren plant de mails in: max. per dag, willekeurig tussen 9u en 17u op werkdagen."+(S.hosted?" Ze vertrekken vanzelf (via de geplande taak) of zodra de app openstaat.":" Laat de app openstaan om ze te laten vertrekken.")
   :'<span class="no">Versturen kan pas als de e-mailinstellingen ingevuld zijn (tab Instellingen). Concepten maken en bekijken kan wel.</span>';
  $("batches").innerHTML=S.batches.length?S.batches.map(b=>{const c=Object.entries(b.counts).map(([k,n])=>`${n} ${k}`).join(", ");
@@ -643,6 +691,8 @@ async function doUpdate(){$("upd").disabled=true;$("upd").textContent="Bezig…"
  const j=await post("/api/update",{});
  if(j.restarting){setTimeout(function w(){fetch("/api/state").then(r=>{if(r.ok)location.reload();else setTimeout(w,1500)}).catch(()=>setTimeout(w,1500))},4000)}
  else{$("upd").disabled=false;$("upd").textContent="Bijwerken"}}
+async function resetAll(){const t=prompt("Alle leads wissen? Typ WISSEN om te bevestigen.");
+ if(t&&t.trim().toUpperCase()=="WISSEN")await post("/api/reset",{confirm:t})}
 async function saveSettings(){const b={};document.querySelectorAll("#settings input").forEach(i=>{if(i.value.trim())b[i.dataset.key]=i.value});
  await post("/api/settings",b);renderSettings()}
 async function load(){const r=await fetch("/api/state");if(r.status==401){location.href="/login";return}S=await r.json();

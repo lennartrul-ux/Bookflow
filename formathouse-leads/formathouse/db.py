@@ -142,6 +142,14 @@ CREATE TABLE IF NOT EXISTS ig_queue (
     added_on     TEXT NOT NULL,         -- datum (YYYY-MM-DD) van opname in de wachtrij
     status_at    TEXT NOT NULL
 );
+-- Wie al benaderd werd; blijft bewaard bij 'opnieuw beginnen' (nooit twee keer contacteren).
+CREATE TABLE IF NOT EXISTS contact_history (
+    kind   TEXT NOT NULL,                  -- email / instagram
+    value  TEXT NOT NULL,
+    at     TEXT NOT NULL,
+    PRIMARY KEY (kind, value)
+);
+
 CREATE TABLE IF NOT EXISTS app_settings (
     key    TEXT PRIMARY KEY,
     value  TEXT

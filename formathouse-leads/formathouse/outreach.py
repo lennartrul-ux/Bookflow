@@ -87,7 +87,8 @@ def candidates(con: sqlite3.Connection, n: int) -> list[sqlite3.Row]:
     out = []
     for c in rows:
         email = db.value(con, c["id"], "algemeen_email")
-        if email and not is_suppressed(con, email):
+        from .manage import already_contacted
+        if email and not is_suppressed(con, email) and not already_contacted(con, "email", email):
             out.append(c)
         if len(out) >= n:
             break

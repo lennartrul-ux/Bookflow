@@ -55,7 +55,9 @@ def build(con: sqlite3.Connection, *, daily_max: int = 15, settings=None, client
         if db.value(con, c["id"], "algemeen_email"):
             continue  # die gaan via e-mail
         handle = handle_from_url(db.value(con, c["id"], "instagram"))
-        if not handle or con.execute("SELECT 1 FROM ig_queue WHERE handle=?", (handle,)).fetchone():
+        from .manage import already_contacted
+        if not handle or already_contacted(con, "instagram", handle) or \
+                con.execute("SELECT 1 FROM ig_queue WHERE handle=?", (handle,)).fetchone():
             continue
         try:
             dm, how = write_dm(lead_for_copy(con, c), client=client, model=model)
