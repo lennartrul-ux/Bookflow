@@ -1,0 +1,24 @@
+# Render Blueprint — gratis online versie van The Format House · Leads.
+# Render: New → Blueprint → kies deze repository en de branch 'formathouse-leads'.
+services:
+  - type: web
+    name: formathouse-leads
+    runtime: python
+    plan: free
+    region: frankfurt
+    branch: formathouse-leads
+    rootDir: formathouse-leads
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn -w 1 --threads 8 --timeout 120 -b 0.0.0.0:$PORT formathouse.webapp:app
+    healthCheckPath: /healthz
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.8
+      - key: DATABASE_URL       # Supabase → Connect → Session pooler (URI)
+        sync: false
+      - key: APP_PASSWORD       # wachtwoord om in te loggen
+        sync: false
+      - key: SECRET_KEY
+        generateValue: true
+      - key: CRON_TOKEN         # kopieer naar GitHub-secret CRON_TOKEN (optioneel)
+        generateValue: true

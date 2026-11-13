@@ -12,8 +12,9 @@ ENV_PATH = PROJECT_ROOT / ".env"
 load_dotenv(ENV_PATH)
 
 
-def save_env(updates: dict[str, str], path: Path = ENV_PATH) -> None:
+def save_env(updates: dict[str, str], path: Path | None = None) -> None:
     """Werk sleutels in .env bij (bestaande regels en commentaar blijven staan)."""
+    path = path or ENV_PATH
     lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
     if not lines and (PROJECT_ROOT / ".env.example").exists():
         lines = (PROJECT_ROOT / ".env.example").read_text(encoding="utf-8").splitlines()
@@ -29,6 +30,33 @@ def save_env(updates: dict[str, str], path: Path = ENV_PATH) -> None:
     except OSError:
         pass
     load_dotenv(path, override=True)
+
+
+def hosted() -> bool:
+    """Online-modus: instellingen in de database i.p.v. in .env."""
+    return bool(os.getenv("DATABASE_URL", "").strip())
+
+
+def _db_settings() -> dict[str, str]:
+    if not hosted():
+        return {}
+    try:
+        from . import db
+        con = db.connect(None)
+        return {r["key"]: r["value"] for r in con.execute("SELECT key, value FROM app_settings")}
+    except Exception:
+        return {}
+
+
+def save_settings(updates: dict[str, str]) -> None:
+    """Lokaal: naar .env. Online: naar de tabel app_settings."""
+    if not hosted():
+        save_env(updates)
+        return
+    from . import db
+    con = db.connect(None)
+    for k, v in updates.items():
+        con.execute("INSERT OR REPLACE INTO app_settings(key, value) VALUES (?,?)", (k, v.strip()))
 
 
 @dataclass(frozen=True)
@@ -53,38 +81,49 @@ class Settings:
     daily_max: int
     signature: str
     unsubscribe_email: str
+    brevo_api_key: str
     ig_daily_max: int
+
+    @property
+    def can_send(self) -> bool:
+        return bool((self.smtp_host or self.brevo_api_key) and self.from_email)
 
     @classmethod
     def load(cls) -> "Settings":
         load_dotenv(ENV_PATH, override=True)
+        overrides = _db_settings()
+
+        def get(name: str, default=None):
+            v = overrides.get(name)
+            return v if v not in (None, "") else os.getenv(name, default)
         def p(name: str, default: str) -> Path:
-            v = Path(os.getenv(name) or default)
+            v = Path(get(name) or default)
             return v if v.is_absolute() else PROJECT_ROOT / v
 
         return cls(
-            google_places_api_key=os.getenv("GOOGLE_PLACES_API_KEY", "").strip(),
+            google_places_api_key=get("GOOGLE_PLACES_API_KEY", "").strip(),
             db_path=p("LEADS_DB", "leads.db"),
             output_dir=p("OUTPUT_DIR", "output"),
-            region=(os.getenv("REGIO") or "vlaanderen").strip().lower(),
-            crawl_user_agent=os.getenv("CRAWL_USER_AGENT")
+            region=(get("REGIO") or "vlaanderen").strip().lower(),
+            crawl_user_agent=get("CRAWL_USER_AGENT")
                 or "FormatHouseResearch/0.1 (bedrijfsonderzoek; respecteert robots.txt)",
-            crawl_delay=float(os.getenv("CRAWL_DELAY_SECONDS") or 3),
-            meta_access_token=os.getenv("META_ACCESS_TOKEN", "").strip(),
-            meta_ig_user_id=os.getenv("META_IG_BUSINESS_ACCOUNT_ID", "").strip(),
-            meta_graph_version=(os.getenv("META_GRAPH_VERSION") or "v23.0").strip(),
-            anthropic_api_key=os.getenv("ANTHROPIC_API_KEY", "").strip(),
-            claude_model=(os.getenv("CLAUDE_MODEL") or "claude-opus-5-5").strip(),
-            smtp_host=os.getenv("SMTP_HOST", "").strip(),
-            smtp_port=int(os.getenv("SMTP_PORT") or 587),
-            smtp_user=os.getenv("SMTP_USER", "").strip(),
-            smtp_password=os.getenv("SMTP_PASSWORD", ""),
-            from_name=os.getenv("OUTREACH_FROM_NAME") or "The Format House",
-            from_email=os.getenv("OUTREACH_FROM_EMAIL", "").strip(),
-            daily_max=min(int(os.getenv("OUTREACH_DAILY_MAX") or 25), 30),
-            signature=(os.getenv("OUTREACH_SIGNATURE") or "Team The Format House")
+            crawl_delay=float(get("CRAWL_DELAY_SECONDS") or 3),
+            meta_access_token=get("META_ACCESS_TOKEN", "").strip(),
+            meta_ig_user_id=get("META_IG_BUSINESS_ACCOUNT_ID", "").strip(),
+            meta_graph_version=(get("META_GRAPH_VERSION") or "v23.0").strip(),
+            anthropic_api_key=get("ANTHROPIC_API_KEY", "").strip(),
+            claude_model=(get("CLAUDE_MODEL") or "claude-opus-5-5").strip(),
+            smtp_host=get("SMTP_HOST", "").strip(),
+            smtp_port=int(get("SMTP_PORT") or 587),
+            smtp_user=get("SMTP_USER", "").strip(),
+            smtp_password=get("SMTP_PASSWORD", ""),
+            from_name=get("OUTREACH_FROM_NAME") or "The Format House",
+            from_email=get("OUTREACH_FROM_EMAIL", "").strip(),
+            daily_max=min(int(get("OUTREACH_DAILY_MAX") or 25), 30),
+            signature=(get("OUTREACH_SIGNATURE") or "Team The Format House")
                 .replace("\\n", "\n"),
-            unsubscribe_email=os.getenv("OUTREACH_UNSUBSCRIBE_EMAIL", "").strip()
-                or os.getenv("OUTREACH_FROM_EMAIL", "").strip(),
-            ig_daily_max=min(int(os.getenv("IG_DAILY_MAX") or 15), 15),
+            unsubscribe_email=get("OUTREACH_UNSUBSCRIBE_EMAIL", "").strip()
+                or get("OUTREACH_FROM_EMAIL", "").strip(),
+            brevo_api_key=(get("BREVO_API_KEY") or "").strip(),
+            ig_daily_max=min(int(get("IG_DAILY_MAX") or 15), 15),
         )

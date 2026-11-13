@@ -54,7 +54,7 @@ def init():
         ("Meta Graph (Fase 3)", s.meta_access_token and s.meta_ig_user_id,
          "zonder: Instagram-cijfers en advertenties blijven 'onbekend'"),
         ("Claude API (Fase 4/5)", s.anthropic_api_key, "zonder: regelgebaseerde score + sjabloonteksten"),
-        ("SMTP (Fase 5)", s.smtp_host and s.from_email, "zonder: alleen concepten, niets versturen"),
+        ("E-mail (Fase 5)", s.can_send, "zonder: alleen concepten, niets versturen"),
     ]
     for name, ok, fallback in checks:
         if ok:
@@ -219,8 +219,8 @@ def outreach_send(batch: int = typer.Option(..., "--batch"),
         typer.echo(f"\nMax. {s.daily_max} per dag, willekeurig tussen 9u en 17u (ma–vr). "
                    "Voeg --confirm toe om goed te keuren.")
         return
-    if not (s.smtp_host and s.from_email):
-        typer.secho("SMTP_HOST en OUTREACH_FROM_EMAIL ontbreken in .env — niets goedgekeurd.",
+    if not s.can_send:
+        typer.secho("E-mailinstellingen (SMTP of BREVO_API_KEY + OUTREACH_FROM_EMAIL) ontbreken — niets goedgekeurd.",
                     fg=typer.colors.RED)
         raise typer.Exit(1)
     n = outreach_mod.approve(con, batch, daily_max=s.daily_max)

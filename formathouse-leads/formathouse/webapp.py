@@ -13,16 +13,25 @@ import time
 import traceback
 import webbrowser
 
-from flask import Flask, Response, abort, jsonify, request, send_file
+import hmac
+import os
+import secrets
+
+from flask import Flask, Response, abort, jsonify, redirect, request, send_file, session
 
 from . import db, discover, enrich, export as export_mod, ig_queue as igq
 from . import outreach, score, social
 from .briefing import CITIES, GROUPS, REGIONS
-from .config import Settings, save_env
+from .config import Settings, hosted, save_settings
 from .httpclient import LoggedClient
 
 PORT = 8765
 app = Flask(__name__)
+app.secret_key = os.getenv("SECRET_KEY") or secrets.token_hex(32)
+app.config.update(SESSION_COOKIE_HTTPONLY=True, SESSION_COOKIE_SAMESITE="Lax",
+                  SESSION_COOKIE_SECURE=bool(os.getenv("APP_PASSWORD")),
+                  PERMANENT_SESSION_LIFETIME=60 * 60 * 24 * 30)
+_TICKER_STARTED = threading.Event()
 
 # ── Achtergrondtaken ─────────────────────────────────────────────────
 
@@ -131,7 +140,7 @@ def ticker():
         time.sleep(600)
         try:
             s, con = _ctx()
-            if s.smtp_host and s.from_email and con.execute(
+            if s.can_send and con.execute(
                     "SELECT 1 FROM outreach_messages WHERE status='gepland' LIMIT 1").fetchone():
                 stats = outreach.tick(con, s, log=lambda *_: None)
                 if stats.get("verstuurd"):
@@ -140,18 +149,96 @@ def ticker():
             traceback.print_exc()
 
 
-# ── Beveiliging: alleen lokaal ───────────────────────────────────────
+# ── Beveiliging ──────────────────────────────────────────────────────
+# Lokaal (geen APP_PASSWORD): alleen bereikbaar via 127.0.0.1.
+# Online (APP_PASSWORD ingesteld): iedereen moet eerst inloggen.
+
+def _password() -> str:
+    return os.getenv("APP_PASSWORD", "")
+
 
 @app.before_request
-def only_local():
-    host = (request.host or "").split(":")[0]
-    if host not in ("127.0.0.1", "localhost"):
-        abort(403)
-    if request.method == "POST" and request.headers.get("X-FH") != "1":
+def guard():
+    if not _TICKER_STARTED.is_set():
+        _TICKER_STARTED.set()
+        threading.Thread(target=ticker, daemon=True).start()
+    if request.path == "/api/cron/tick":
+        return None  # beschermd met CRON_TOKEN
+    if not _password():
+        host = (request.host or "").split(":")[0]
+        if host not in ("127.0.0.1", "localhost"):
+            abort(403)
+    elif request.path not in ("/login", "/healthz") and not session.get("ok"):
+        if request.path.startswith("/api/"):
+            abort(401)
+        return redirect("/login")
+    if request.method == "POST" and request.path != "/login" and request.headers.get("X-FH") != "1":
         abort(403)  # alleen verzoeken vanuit de eigen pagina
 
 
+@app.get("/healthz")
+def healthz():
+    return "ok"
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if not _password():
+        return redirect("/")
+    error = ""
+    if request.method == "POST":
+        if hmac.compare_digest(request.form.get("password", ""), _password()):
+            session.permanent = True
+            session["ok"] = True
+            return redirect("/")
+        time.sleep(1.5)
+        error = "Verkeerd wachtwoord."
+    return Response(LOGIN_PAGE.replace("__ERROR__", error), mimetype="text/html")
+
+
+@app.post("/logout")
+def logout():
+    session.clear()
+    return jsonify({"ok": True})
+
+
+@app.post("/api/cron/tick")
+def cron_tick():
+    """Voor een geplande taak (bv. GitHub Actions): verstuur geplande mails."""
+    token = os.getenv("CRON_TOKEN", "")
+    if not token or not hmac.compare_digest(request.headers.get("X-Cron-Token", ""), token):
+        abort(403)
+    s, con = _ctx()
+    if not s.can_send:
+        return jsonify({"ok": True, "message": "geen e-mailinstellingen"})
+    return jsonify({"ok": True, "stats": outreach.tick(con, s, log=lambda *_: None)})
+
+
+LOGIN_PAGE = """<!doctype html><html lang="nl"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1"><title>Format House Leads</title>
+<style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f6f5f2;color:#1d1d1b;
+font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+@media (prefers-color-scheme:dark){body{background:#141413;color:#ecebe6}form{background:#1e1e1c!important;border-color:#33322e!important}
+input{background:#1e1e1c;color:#ecebe6;border-color:#33322e!important}button{background:#ecebe6!important;color:#141413!important}}
+form{background:#fff;border:1px solid #e4e2dc;border-radius:14px;padding:28px;width:min(340px,90vw);display:grid;gap:12px}
+h1{font-size:20px;margin:0}input{font:inherit;padding:10px;border:1px solid #e4e2dc;border-radius:8px}
+button{font:inherit;font-weight:600;border:0;border-radius:10px;padding:10px;background:#1d1d1b;color:#fff;cursor:pointer}
+.e{color:#b3261e;font-size:14px;min-height:1em}</style></head><body>
+<form method="post"><h1>The Format House · Leads</h1>
+<input type="password" name="password" placeholder="Wachtwoord" autofocus required>
+<div class="e">__ERROR__</div><button>Inloggen</button></form></body></html>"""
+
+
 # ── API ──────────────────────────────────────────────────────────────
+
+# instellingsnaam → attribuut van Settings (zodat ook waarden uit de database tellen)
+_ATTR = {"GOOGLE_PLACES_API_KEY": "google_places_api_key", "ANTHROPIC_API_KEY": "anthropic_api_key",
+         "CLAUDE_MODEL": "claude_model", "META_ACCESS_TOKEN": "meta_access_token",
+         "META_IG_BUSINESS_ACCOUNT_ID": "meta_ig_user_id", "BREVO_API_KEY": "brevo_api_key",
+         "SMTP_HOST": "smtp_host", "SMTP_PORT": "smtp_port", "SMTP_USER": "smtp_user",
+         "SMTP_PASSWORD": "smtp_password", "OUTREACH_FROM_EMAIL": "from_email",
+         "OUTREACH_UNSUBSCRIBE_EMAIL": "unsubscribe_email", "OUTREACH_DAILY_MAX": "daily_max",
+         "CRAWL_USER_AGENT": "crawl_user_agent", "REGIO": "region"}
 
 SETTING_FIELDS = [
     ("GOOGLE_PLACES_API_KEY", "Google Places API-sleutel", True),
@@ -159,6 +246,7 @@ SETTING_FIELDS = [
     ("CLAUDE_MODEL", "Claude-model", False),
     ("META_ACCESS_TOKEN", "Meta access token", True),
     ("META_IG_BUSINESS_ACCOUNT_ID", "Instagram business account-id", False),
+    ("BREVO_API_KEY", "Brevo API-sleutel (mail via HTTPS)", True),
     ("SMTP_HOST", "SMTP-server", False),
     ("SMTP_PORT", "SMTP-poort", False),
     ("SMTP_USER", "SMTP-gebruiker", False),
@@ -175,10 +263,9 @@ SETTING_FIELDS = [
 @app.get("/api/state")
 def state():
     s, con = _ctx()
-    import os
     settings = []
     for key, label, secret in SETTING_FIELDS:
-        val = os.getenv(key, "")
+        val = str(getattr(s, _ATTR.get(key, ""), "") or "") if key in _ATTR else os.getenv(key, "")
         settings.append({"key": key, "label": label, "secret": secret, "set": bool(val),
                          "value": "" if secret else val})
     groups = [{"key": g.key, "label": g.label, "count": discover.accepted_count(con, g.key),
@@ -214,7 +301,7 @@ def state():
         "settings": settings, "region": s.region, "groups": groups, "rejected": rejected,
         "active": active, "steps": steps, "top": top, "batches": batches, "ig": ig,
         "ig_counts": ig_counts,
-        "can_send": bool(s.smtp_host and s.from_email),
+        "can_send": s.can_send, "hosted": hosted(), "login": bool(_password()),
         "suppression": con.execute("SELECT COUNT(*) FROM suppression").fetchone()[0],
         "cities": [c.name for c in CITIES if c.region in REGIONS.get(s.region, {"VL"})],
         "source": "Google Places" if s.google_places_api_key else "OpenStreetMap (gratis)",
@@ -245,7 +332,7 @@ def api_settings():
     updates = {k: str(v) for k, v in b.items() if k in allowed and str(v).strip() != ""}
     if "REGIO" in updates and updates["REGIO"] not in REGIONS:
         return jsonify({"ok": False, "message": "Werkgebied moet vlaanderen, belgie of be_nl zijn."}), 400
-    save_env(updates)
+    save_settings(updates)
     return jsonify({"ok": True, "message": f"{len(updates)} instelling(en) bewaard."})
 
 
@@ -283,7 +370,7 @@ def api_draft():
 @app.post("/api/outreach/approve")
 def api_approve():
     s = Settings.load()
-    if not (s.smtp_host and s.from_email):
+    if not s.can_send:
         return jsonify({"ok": False, "message": "Vul eerst de e-mailinstellingen in (SMTP en afzender)."}), 400
     batch = _int(_body().get("batch"))
     ok = start_job(f"Batch {batch} goedkeuren en versturen", lambda: job_approve(batch))
@@ -414,7 +501,8 @@ padding:10px 16px;border-radius:10px;opacity:0;transition:.2s;pointer-events:non
 section{display:none}section.on{display:block}
 @media (max-width:600px){header,nav,main{padding-left:16px;padding-right:16px}}
 </style></head><body>
-<header><h1>The Format House · Leads</h1><span class="sub" id="sub"></span></header>
+<header><h1>The Format House · Leads</h1><span class="sub" id="sub"></span>
+<button class="btn sec" id="logout" style="margin-left:auto;display:none" onclick="post('/logout',{}).then(()=>location.href='/login')">Uitloggen</button></header>
 <nav id="nav"></nav>
 <main>
 <div class="card" id="jobcard" style="display:none"><h2 id="jobname"></h2><div id="log"></div></div>
@@ -469,7 +557,7 @@ section{display:none}section.on{display:block}
 </section>
 
 <section id="s-set"><div class="card"><h2>Instellingen</h2>
- <p class="hint">Alles is optioneel. Zonder sleutel gebruikt de app gratis alternatieven of laat ze het veld op 'onbekend'. Sleutels blijven op je eigen computer (in het bestand .env) en worden nooit getoond.</p>
+ <p class="hint">Alles is optioneel. Zonder sleutel gebruikt de app gratis alternatieven of laat ze het veld op 'onbekend'. Sleutels worden nooit opnieuw getoond. Lokaal staan ze in het bestand .env op je computer; in de online versie in je eigen database.</p>
  <div class="grid2" id="settings"></div>
  <div class="row" style="margin-top:14px"><button class="btn" onclick="saveSettings()">Bewaren</button></div></div></section>
 </main>
@@ -487,7 +575,7 @@ function render(){
  $("nav").innerHTML=TABS.map(([k,l])=>`<button class="${k==tab?"on":""}" onclick="setTab('${k}')">${l}</button>`).join("");
  document.querySelectorAll("section").forEach(s=>s.classList.toggle("on",s.id=="s-"+tab));
  if(!S)return;
- $("sub").textContent=`werkgebied: ${S.region}`;$("src").textContent=S.source;
+ $("sub").textContent=`werkgebied: ${S.region}`+(S.hosted?" · online":"");$("logout").style.display=S.login?"":"none";$("src").textContent=S.source;
  const total=S.groups.reduce((a,g)=>a+(g.quota?g.count:0),0);
  $("stats").innerHTML=S.groups.filter(g=>g.quota).map(g=>`<div class="stat"><b>${g.count} <span>/ ${g.quota}</span></b><span>${esc(g.label)}</span><div class="bar"><i style="width:${Math.min(100,g.count/g.quota*100)}%"></i></div></div>`).join("")
   +`<div class="stat"><b>${S.steps.score||0}</b><span>gescoord van ${S.active} leads</span></div><div class="stat"><b>${S.rejected}</b><span>afgewezen door voorfilter</span></div>`;
@@ -499,7 +587,7 @@ function render(){
   <td><b>${esc(r.name)}</b><br><span class="muted">${esc(r.city||"")}</span>${r.website?`<br><a href="${esc(r.website)}" target="_blank">website</a>`:""}</td>
   <td>${r.email?esc(r.email)+"<br>":""}${r.instagram?`<a href="${esc(r.instagram)}" target="_blank">Instagram</a>`:""}</td><td>${esc(r.insteek||"")}</td></tr>`).join("")
   :`<tr><td colspan="5" class="muted">Nog geen gescoorde leads. Ga naar Start → zoeken en verwerken.</td></tr>`;
- $("sendhint").innerHTML=S.can_send?"Goedkeuren plant de mails in: max. per dag, willekeurig tussen 9u en 17u op werkdagen. Laat de app openstaan om ze te laten vertrekken."
+ $("sendhint").innerHTML=S.can_send?"Goedkeuren plant de mails in: max. per dag, willekeurig tussen 9u en 17u op werkdagen."+(S.hosted?" Ze vertrekken vanzelf (via de geplande taak) of zodra de app openstaat.":" Laat de app openstaan om ze te laten vertrekken.")
   :'<span class="no">Versturen kan pas als de e-mailinstellingen ingevuld zijn (tab Instellingen). Concepten maken en bekijken kan wel.</span>';
  $("batches").innerHTML=S.batches.length?S.batches.map(b=>{const c=Object.entries(b.counts).map(([k,n])=>`${n} ${k}`).join(", ");
   return `<tr><td>${b.id}</td><td>${b.created}</td><td>${b.leads}</td><td>${esc(c)}</td><td style="white-space:nowrap"><a class="btn sec" href="/download/batch/${b.id}.xlsx">Bekijken</a>
@@ -518,7 +606,7 @@ function renderSettings(){$("settings").innerHTML=S.settings.map(f=>`<label>${es
  <input data-key="${f.key}" type="${f.secret?"password":"text"}" placeholder="${f.secret&&f.set?"•••••• (laat leeg om te behouden)":""}" value="${esc(f.value)}"></label>`).join("")}
 async function saveSettings(){const b={};document.querySelectorAll("#settings input").forEach(i=>{if(i.value.trim())b[i.dataset.key]=i.value});
  await post("/api/settings",b);renderSettings()}
-async function load(){const r=await fetch("/api/state");S=await r.json();
+async function load(){const r=await fetch("/api/state");if(r.status==401){location.href="/login";return}S=await r.json();
  if(!$("d-group").dataset.f){$("d-group").innerHTML+=GROUPS.map(g=>`<option value="${g.key}">${esc(g.label)}</option>`).join("");
   $("d-city").innerHTML+=S.cities.map(c=>`<option>${esc(c)}</option>`).join("");$("d-group").dataset.f=1;renderSettings()}
  if(wasRunning&&!S.job.running)toast(S.job.error?"Taak gestopt met een fout — zie het logboek":"Klaar!");wasRunning=S.job.running;render()}
@@ -528,7 +616,6 @@ load();setInterval(load,2000);
 
 def main(open_browser: bool = True) -> None:
     s, _con = _ctx()
-    threading.Thread(target=ticker, daemon=True).start()
     url = f"http://127.0.0.1:{PORT}/"
     print(f"\n  The Format House · Leads draait op {url}\n  Sluit dit venster om de app te stoppen.\n")
     if open_browser:

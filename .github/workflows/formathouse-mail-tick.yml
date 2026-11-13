@@ -1,0 +1,24 @@
+# Wekt de gratis online app op werkdagen elk kwartier en laat geplande mails vertrekken.
+# Doet niets zolang de secrets APP_URL en CRON_TOKEN niet ingesteld zijn.
+name: Format House – geplande mails
+
+on:
+  schedule:
+    - cron: "*/15 7-16 * * 1-5"   # UTC; ≈ 8–17u (winter) / 9–18u (zomer) in België
+  workflow_dispatch:
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Geplande mails versturen
+        env:
+          APP_URL: ${{ secrets.APP_URL }}
+          CRON_TOKEN: ${{ secrets.CRON_TOKEN }}
+        run: |
+          if [ -z "$APP_URL" ] || [ -z "$CRON_TOKEN" ]; then
+            echo "APP_URL/CRON_TOKEN niet ingesteld — niets te doen."; exit 0
+          fi
+          curl -fsS --retry 3 --retry-delay 30 --max-time 150 -X POST \
+            -H "X-Cron-Token: $CRON_TOKEN" "${APP_URL%/}/api/cron/tick"

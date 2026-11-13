@@ -224,6 +224,32 @@ def smtp_sender(settings) -> Callable[[EmailMessage], None]:
     return send
 
 
+BREVO_URL = "https://api.brevo.com/v3/smtp/email"
+
+
+def brevo_sender(settings) -> Callable[[EmailMessage], None]:
+    """Versturen via de Brevo-API over HTTPS (werkt ook waar SMTP-poorten dicht zijn)."""
+    import requests
+
+    def send(msg: EmailMessage) -> None:
+        payload = {
+            "sender": {"name": settings.from_name, "email": settings.from_email},
+            "to": [{"email": msg["To"]}],
+            "subject": msg["Subject"],
+            "textContent": msg.get_content(),
+            "headers": {k: msg[k] for k in ("In-Reply-To", "References", "List-Unsubscribe") if msg[k]},
+        }
+        r = requests.post(BREVO_URL, json=payload, timeout=30,
+                          headers={"api-key": settings.brevo_api_key, "accept": "application/json"})
+        if r.status_code >= 300:
+            raise RuntimeError(f"Brevo {r.status_code}: {r.text[:200]}")
+    return send
+
+
+def default_sender(settings) -> Callable[[EmailMessage], None]:
+    return brevo_sender(settings) if getattr(settings, "brevo_api_key", "") else smtp_sender(settings)
+
+
 def build_message(m: sqlite3.Row, settings, thread_id: str | None) -> EmailMessage:
     msg = EmailMessage()
     msg["From"] = formataddr((settings.from_name, settings.from_email))
@@ -243,9 +269,9 @@ def tick(con: sqlite3.Connection, settings, *, send: Callable | None = None,
          now: dt.datetime | None = None, rnd: random.Random | None = None,
          log: Callable = print) -> dict[str, int]:
     """Verstuur alle goedgekeurde, geplande mails waarvan het tijdstip voorbij is."""
-    if not (settings.smtp_host and settings.from_email) and send is None:
-        raise RuntimeError("SMTP_HOST / OUTREACH_FROM_EMAIL ontbreken in .env — er wordt niets verstuurd.")
-    send = send or smtp_sender(settings)
+    if send is None and not settings.can_send:
+        raise RuntimeError("E-mailinstellingen ontbreken (SMTP of Brevo + afzender) — er wordt niets verstuurd.")
+    send = send or default_sender(settings)
     rnd = rnd or random.Random()
     now = now or dt.datetime.now(dt.timezone.utc)
     stats = {"verstuurd": 0, "gestopt": 0, "uitgesteld": 0, "fout": 0}
@@ -298,7 +324,7 @@ def tick(con: sqlite3.Connection, settings, *, send: Callable | None = None,
         except Exception as e:
             con.execute("UPDATE outreach_messages SET status='fout', error=? WHERE id=?",
                         (repr(e)[:300], m["id"]))
-            db.log_call(con, source="smtp", method="SEND", url=settings.smtp_host or "test",
+            db.log_call(con, source="e-mail", method="SEND", url=settings.smtp_host or "brevo",
                         params={"bericht": m["id"]}, status_code=None, result_summary=None,
                         error=repr(e)[:300])
             stats["fout"] += 1
@@ -306,7 +332,7 @@ def tick(con: sqlite3.Connection, settings, *, send: Callable | None = None,
         sent = now.isoformat(timespec="seconds")
         con.execute("""UPDATE outreach_messages SET status='verstuurd', sent_at=?, message_id=?
                        WHERE id=?""", (sent, msg["Message-ID"], m["id"]))
-        db.log_call(con, source="smtp", method="SEND", url=settings.smtp_host or "test",
+        db.log_call(con, source="e-mail", method="SEND", url=settings.smtp_host or "brevo",
                     params={"bericht": m["id"], "stap": m["step"]}, status_code=250,
                     result_summary=f"verstuurd naar {m['email']}")
         if m["step"] == 0:

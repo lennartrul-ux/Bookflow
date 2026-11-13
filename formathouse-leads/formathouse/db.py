@@ -142,6 +142,11 @@ CREATE TABLE IF NOT EXISTS ig_queue (
     added_on     TEXT NOT NULL,         -- datum (YYYY-MM-DD) van opname in de wachtrij
     status_at    TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS app_settings (
+    key    TEXT PRIMARY KEY,
+    value  TEXT
+);
+
 CREATE TABLE IF NOT EXISTS ig_log (
     id      INTEGER PRIMARY KEY,
     ts      TEXT NOT NULL,
@@ -156,7 +161,26 @@ def now() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
 
 
-def connect(path: Path | str) -> sqlite3.Connection:
+_PG_READY: set[str] = set()
+_LOCAL = __import__("threading").local()
+
+
+def connect(path: Path | str):
+    """SQLite-bestand (lokaal), of Postgres/Supabase als DATABASE_URL is ingesteld."""
+    import os
+    url = os.getenv("DATABASE_URL", "").strip()
+    if url:
+        from .pgcompat import Connection, schema_for_pg
+        cached = getattr(_LOCAL, "pg", None)
+        if cached is not None and cached[0] == url and not cached[1].closed:
+            con = cached[1]
+        else:
+            con = Connection(url)
+            _LOCAL.pg = (url, con)
+        if url not in _PG_READY:
+            con.executescript(schema_for_pg(SCHEMA))
+            _PG_READY.add(url)
+        return con
     con = sqlite3.connect(str(path), timeout=30, check_same_thread=False)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA foreign_keys = ON")

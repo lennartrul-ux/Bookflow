@@ -1,0 +1,55 @@
+THE FORMAT HOUSE · LEADS — GRATIS ONLINE ZETTEN (± 15 minuten, één keer)
+
+Daarna open je de app via een link (bv. https://formathouse-leads.onrender.com),
+vanop elke computer of gsm, met een wachtwoord.
+
+Wat het gratis aanbod betekent:
+- De app valt in slaap na 15 minuten zonder bezoek. Openen duurt dan ± 1 minuut.
+- Laat het tabblad openstaan zolang er een taak loopt (zoeken/verwerken), anders kan
+  die onderbroken worden. Opnieuw starten gaat gewoon verder waar hij was.
+- Supabase pauzeert een gratis project na ± 7 dagen zonder gebruik. Dan moet je het
+  in het Supabase-dashboard met één klik terug aanzetten. Stap 4 voorkomt dat op werkdagen.
+
+──────────────────────────────────────────────────────────────────────
+STAP 1 — Database (Supabase)
+1. Ga naar https://supabase.com/dashboard → "New project".
+   Naam: formathouse-leads · Regio: Frankfurt (EU) · kies een databasewachtwoord
+   en bewaar het.
+2. Wacht tot het project klaar is en klik bovenaan op "Connect".
+3. Kies "Session pooler" en kopieer de URI. Die ziet er zo uit:
+   postgresql://postgres.xxxx:[YOUR-PASSWORD]@aws-0-eu-central-1.pooler.supabase.com:5432/postgres
+4. Vervang [YOUR-PASSWORD] door je databasewachtwoord. Dit is je DATABASE_URL.
+   De tabellen maakt de app zelf aan.
+
+STAP 2 — App (Render)
+1. Ga naar https://render.com en meld je aan met GitHub.
+2. Klik op "New" → "Blueprint". Kies de repository "Bookflow" en de branch
+   "formathouse-leads". Render leest het bestand render.yaml.
+3. Render vraagt twee waarden:
+   - DATABASE_URL = de URI uit stap 1
+   - APP_PASSWORD = een wachtwoord naar keuze om in te loggen
+4. Klik op "Apply". Na 3 à 5 minuten staat de app online. De link zie je bovenaan
+   de service (…onrender.com).
+
+STAP 3 — Inloggen en instellen
+1. Open de link en log in met je APP_PASSWORD.
+2. In het tabblad Instellingen vul je in wat je hebt (alles optioneel): Google-sleutel,
+   Claude-sleutel, Meta, en voor e-mail Brevo (zie stap 5).
+
+STAP 4 — Mails automatisch laten vertrekken (optioneel, gratis)
+1. Kopieer in Render bij je service → "Environment" de waarde van CRON_TOKEN.
+2. Ga op GitHub naar de repository Bookflow → Settings → Secrets and variables →
+   Actions → "New repository secret". Maak er twee aan:
+   - APP_URL    = je app-link (bv. https://formathouse-leads.onrender.com)
+   - CRON_TOKEN = de waarde uit Render
+Op werkdagen wekt GitHub de app dan elk kwartier en vertrekken de goedgekeurde mails.
+
+STAP 5 — E-mail versturen (pas nodig als je echt gaat mailen)
+1. Maak een gratis account op https://www.brevo.com (± 300 mails per dag gratis).
+2. Voeg je outreach-domein toe en bevestig het (Senders, Domains & Dedicated IPs).
+3. Maak een API-sleutel aan (SMTP & API → API Keys).
+4. Vul in de app bij Instellingen in: Brevo API-sleutel en Afzender
+   (een adres op je outreach-domein).
+
+Je code staat op GitHub. Elke wijziging die ik push op de branch "formathouse-leads",
+zet Render automatisch online.
